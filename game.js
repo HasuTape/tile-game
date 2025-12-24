@@ -11,6 +11,12 @@ let gameRunning = false;
 let blocksSliding = false; // whether blocks are currently moving/animating (prevents player input)
 let playerRender = { xPos: 0, yPos: 0, startX: 0, startY: 0, destX: 0, destY: 0, moving: false, animProgress: 0, animDuration: 0.12, speed: 0 }; // pixels/s
 
+// Mobile tap-to-move selection state
+let playerSelected = false;
+let moveHighlights = []; // array of {x,y} tiles that are valid moves when player is selected
+let selectionLocked = false; // true while a move is in progress and highlights shouldn't be cleared
+
+
 const TILE_SIZE = 40;
 // assign dependent speeds after constants are initialized
 playerRender.speed = TILE_SIZE * 8; // kept for compatibility if needed
@@ -322,12 +328,169 @@ function startLevel(levelId) {
     gameLoop();
 }
 
+function getCanvasTileFromEvent(e) {
+    const canvasRect = canvas.getBoundingClientRect();
+    const cx = e.clientX - canvasRect.left;
+    const cy = e.clientY - canvasRect.top;
+    const tx = Math.floor(cx / TILE_SIZE);
+    const ty = Math.floor(cy / TILE_SIZE);
+    if (!currentLevel) return null;
+    if (tx < 0 || tx >= currentLevel.width || ty < 0 || ty >= currentLevel.height) return null;
+    return { x: tx, y: ty };
+}
+
+function computeMoveHighlights() {
+    moveHighlights = [];
+    if (!currentLevel) return;
+    const dirs = [ {dx:0,dy:-1}, {dx:0,dy:1}, {dx:-1,dy:0}, {dx:1,dy:0} ];
+    dirs.forEach(d => {
+        const nx = playerPos.x + d.dx;
+        const ny = playerPos.y + d.dy;
+        if (nx < 0 || nx >= currentLevel.width || ny < 0 || ny >= currentLevel.height) return;
+        // If can move there directly
+        if (canMoveTo(nx, ny)) {
+            moveHighlights.push({ x: nx, y: ny });
+            return;
+        }
+        // If there's a block, check if it can be pushed
+        const block = pushableBlocks.find(b => b.x === nx && b.y === ny);
+        if (block) {
+            // collect chain
+            let cx = nx, cy = ny;
+            const chain = [];
+            while (true) {
+                const bb = pushableBlocks.find(b => b.x === cx && b.y === cy);
+                if (!bb) break;
+                chain.push(bb);
+                cx += d.dx; cy += d.dy;
+            }
+            const last = chain[chain.length - 1];
+            const tx = last.x + d.dx;
+            const ty = last.y + d.dy;
+            if (canPushBlockTo(tx, ty)) {
+                moveHighlights.push({ x: nx, y: ny });
+            }
+        }
+    });
+}
+
+function clearPlayerSelection() {
+    playerSelected = false;
+    moveHighlights = [];
+    selectionLocked = false;
+    draw();
+}
+
+// Clear highlights immediately when a move action is started. Keeps selection locked
+// so further taps are ignored until the move / animations complete.
+function clearHighlightsForAction() {
+    playerSelected = false;
+    moveHighlights = [];
+    selectionLocked = true;
+    draw();
+}
+
+function clearSelectionWhenIdle() {
+    return new Promise(resolve => {
+        const id = setInterval(() => {
+            const playerMoving = !!(playerRender && playerRender.moving);
+            const blocksMoving = pushableBlocks.some(b => b.moving);
+            if (!playerMoving && !blocksMoving) {
+                clearInterval(id);
+                clearPlayerSelection();
+                resolve();
+            }
+        }, 50);
+        // safety timeout
+        setTimeout(() => {
+            clearInterval(id);
+            clearPlayerSelection();
+            resolve();
+        }, 5000);
+    });
+}
+
+function canvasPointerDown(e) {
+    // Only enable selection on narrow screens (mobile)
+    if (!window.matchMedia('(max-width: 800px)').matches) return;
+    if (!gameRunning || !currentLevel) return;
+    if (blocksSliding) return; // don't allow during block animations
+
+    const pos = getCanvasTileFromEvent(e);
+    if (!pos) return;
+
+    // If not in selection mode, tap on player selects
+    if (!playerSelected) {
+        if (pos.x === playerPos.x && pos.y === playerPos.y) {
+            playerSelected = true;
+            computeMoveHighlights();
+            draw();
+        }
+        return;
+    }
+
+    // If selection is locked (move in progress), ignore taps
+    if (selectionLocked) return;
+
+    // If we are selecting, check if tapped a highlighted tile
+    const found = moveHighlights.find(h => h.x === pos.x && h.y === pos.y);
+    if (found) {
+        // compute dx/dy from current playerPos to target
+        const dx = found.x - playerPos.x;
+        const dy = found.y - playerPos.y;
+        // Convert to key and trigger move via handleKeyPress
+        let key = null;
+        if (dx === -1 && dy === 0) key = 'a';
+        else if (dx === 1 && dy === 0) key = 'd';
+        else if (dx === 0 && dy === -1) key = 'w';
+        else if (dx === 0 && dy === 1) key = 's';
+        if (key) {
+            const ev = { key: key, preventDefault: () => {} };
+            // Lock selection until movement/animations finish
+            selectionLocked = true;
+            handleKeyPress(ev);
+            // Clear selection after player and blocks finish moving
+            clearSelectionWhenIdle();
+        }
+        return;
+    }
+
+    // Tapped elsewhere: cancel selection
+    clearPlayerSelection();
+}
+
+function sendMobileKey(key) {
+    if (!key) return;
+    const ev = { key: key, preventDefault: () => {} };
+    handleKeyPress(ev);
+}
+
 function setupInputs() {
     document.removeEventListener('keydown', handleKeyPress);
     document.addEventListener('keydown', handleKeyPress);
     const backBtn = document.getElementById('backButton');
     if (backBtn) backBtn.onclick = backToMenu;
     else console.warn('setupInputs: No #backButton found in DOM.');
+
+    // Mobile controls (pointer-based) — buttons send equivalent key presses
+    const mobileButtons = document.querySelectorAll('#mobileControls button[data-key]');
+    if (mobileButtons && mobileButtons.length > 0) {
+        mobileButtons.forEach(btn => {
+            btn.addEventListener('pointerdown', (e) => {
+                e.preventDefault();
+                btn.classList.add('active');
+                const k = btn.getAttribute('data-key');
+                sendMobileKey(k);
+            });
+            ['pointerup','pointercancel','pointerleave'].forEach(evName => btn.addEventListener(evName, () => btn.classList.remove('active')));
+        });
+    }
+
+    // Canvas tap handler for mobile tap-to-move
+    if (canvas) {
+        canvas.removeEventListener('pointerdown', canvasPointerDown);
+        canvas.addEventListener('pointerdown', canvasPointerDown);
+    }
 }
 
 function handleKeyPress(e) {
@@ -386,6 +549,8 @@ function handleKeyPress(e) {
     };
 
     if (canMoveTo(newX, newY) || pushableBlocks.some(b => b.x === newX && b.y === newY)) {
+        // A valid move/push was initiated — clear highlights immediately for this action
+        clearHighlightsForAction();
         // Collect all blocks in a line that we are pushing
         let blocksToPush = [];
         let checkX = newX;
@@ -469,6 +634,8 @@ function handleKeyPress(e) {
                  waitForBlocksToFinish(currentChain).then(() => {
                      blocksSliding = false;
                      movePlayerToTile(newX, newY);
+                     // Ensure selection is cleared after the movement finishes
+                     clearPlayerSelection();
                  });
                  return; 
 
@@ -817,6 +984,19 @@ function draw() {
         ctx.fill();
     });
     
+    // Draw move highlights if player is selected (mobile tap mode)
+    if (playerSelected && moveHighlights && moveHighlights.length > 0) {
+        ctx.fillStyle = 'rgba(255, 255, 0, 0.22)';
+        ctx.strokeStyle = 'rgba(255, 255, 0, 0.6)';
+        moveHighlights.forEach(h => {
+            const hx = h.x * TILE_SIZE;
+            const hy = h.y * TILE_SIZE;
+            ctx.fillRect(hx, hy, TILE_SIZE, TILE_SIZE);
+            ctx.lineWidth = 2;
+            ctx.strokeRect(hx + 1, hy + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+        });
+    }
+
     const pr = playerRender && typeof playerRender.xPos === 'number' ? playerRender : { xPos: playerPos.x * TILE_SIZE, yPos: playerPos.y * TILE_SIZE };
     const px = pr.xPos;
     const py = pr.yPos;

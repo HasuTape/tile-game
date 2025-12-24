@@ -157,6 +157,46 @@
             0% { transform: translate(-50%, -50%) scale(0.5); opacity: 0; }
             100% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
         }
+
+        /* Mobile controls (hidden on wide screens) */
+        .mobile-controls { display: none; }
+        @media (max-width: 800px) {
+            .mobile-controls {
+                display: flex;
+                gap: 12px;
+                align-items: center;
+                justify-content: center;
+                position: fixed;
+                left: 12px;
+                bottom: 12px;
+                z-index: 2000;
+                background: rgba(20,20,20,0.6);
+                padding: 10px;
+                border-radius: 10px;
+                touch-action: none;
+            }
+
+            .mobile-controls .dpad { display: flex; flex-direction: column; gap: 6px; align-items: center; }
+            .mobile-controls .dpad .row { display: flex; gap: 6px; }
+            .mc-btn {
+                width: 48px;
+                height: 48px;
+                border-radius: 8px;
+                border: none;
+                background: rgba(255,255,255,0.08);
+                color: #fff;
+                font-size: 18px;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                box-shadow: 0 2px 0 rgba(0,0,0,0.4);
+                user-select: none;
+                -webkit-tap-highlight-color: transparent;
+            }
+
+            .mc-btn:active, .mc-btn.active { transform: translateY(1px); background: rgba(255,255,255,0.14); }
+            .mc-btn.undo { width: 44px; height: 44px; font-size: 20px; }
+        }
     </style>
 </head>
 <body>
@@ -173,6 +213,19 @@
             <canvas id="canvas"></canvas>
             <div class="controls">
                 <p>W/A/S/D — move. <button id="backButton">Back</button></p>
+            </div>
+
+            <!-- Mobile controls: visible on narrow screens -->
+            <div id="mobileControls" class="mobile-controls" aria-hidden="false">
+                <div class="dpad">
+                    <button class="mc-btn up" data-key="w" aria-label="Up">▲</button>
+                    <div class="row">
+                        <button class="mc-btn left" data-key="a" aria-label="Left">◀</button>
+                        <button class="mc-btn down" data-key="s" aria-label="Down">▼</button>
+                        <button class="mc-btn right" data-key="d" aria-label="Right">▶</button>
+                    </div>
+                </div>
+                <button class="mc-btn undo" data-key="z" aria-label="Undo">↶</button>
             </div>
         </div>
     </div>
