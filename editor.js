@@ -17,6 +17,7 @@ async function loadLevels() {
         level.id = index;
         if (!('instructions' in level)) level.instructions = '';
         if (!level.orbs) level.orbs = [];
+        if (!('community' in level)) level.community = false;
         // Migrate legacy orb data: if waypoints present but seq missing, use first waypoint as start and set a default seq
         level.orbs.forEach(orb => {
             if (!orb) return;
@@ -47,6 +48,9 @@ function setCurrentLevel(index) {
         document.getElementById('levelWidth').value = level.width;
         document.getElementById('levelHeight').value = level.height;
         document.getElementById('levelInstructions').value = level.instructions || ''; 
+        // Community badge
+        const commEl = document.getElementById('levelCommunity');
+        if (commEl) commEl.checked = !!level.community;
         
         updateOrbsList();
         initCanvas();
@@ -254,12 +258,13 @@ function newLevel() {
         id: levels.length,
         name: `Level ${levels.length + 1}`,
         instructions: '',
+        community: false,
         width: 10,
         height: 8,
         tiles: Array(8).fill(0).map(() => Array(10).fill(0)),
         playerStart: [0, 0],
         orbs: []
-    };
+    }; 
     
     levels.push(newLevel);
     setCurrentLevel(levels.length - 1);
@@ -293,7 +298,8 @@ function updateLevelList() {
             div.classList.add('active');
         }
         
-        div.textContent = `${index + 1}. ${level.name}`;
+        const badge = level.community ? '<span style="background:#ffcc00; color:#000; padding:2px 6px; border-radius:6px; font-weight:bold; margin-left:8px;">C</span>' : '';
+        div.innerHTML = `${index + 1}. ${level.name} ${badge}`;
         div.onclick = () => setCurrentLevel(index);
         
         container.appendChild(div);
@@ -587,6 +593,8 @@ function updateLevelName() {
     const idx = currentLevelIndex;
     levels[idx].name = document.getElementById('levelName').value;
     levels[idx].instructions = document.getElementById('levelInstructions').value;
+    const commEl = document.getElementById('levelCommunity');
+    if (commEl) levels[idx].community = !!commEl.checked;
 }
 
 // Open the current level in the game as a test. The level is stored to localStorage and game.html is opened with ?test=1

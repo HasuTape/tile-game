@@ -249,7 +249,8 @@ function setupLevelSelect() {
     levels.forEach((level, index) => {
         const btn = document.createElement('button');
         btn.className = 'levelButton';
-        btn.textContent = `${index + 1}`;
+        const badgeHtml = level.community ? '<span class="community-badge">C</span>' : '';
+        btn.innerHTML = `${index + 1} ${badgeHtml} <div style="font-size:12px; color:#ddd; margin-top:4px;">${level.name}</div>`;
         btn.title = level.name;
         
         const isCompleted = completedLevels.includes(index);
@@ -374,7 +375,7 @@ function startLevel(levelId) {
     
     document.getElementById('levelSelectWrapper').style.display = 'none';
     document.getElementById('gameView').classList.add('active');
-    document.getElementById('levelInfo').textContent = `Level ${levelId + 1}: ${currentLevel.name}`;
+    document.getElementById('levelInfo').innerHTML = `Level ${levelId + 1}: ${currentLevel.name} ${currentLevel.community ? '<span class="community-badge">C</span>' : ''}`;
     const instrEl = document.getElementById('levelInstructions');
     if (instrEl) instrEl.textContent = currentLevel.instructions || '';
     
