@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Level editor</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #1a1a1a;
+            color: #fff;
+            font-family: Arial, sans-serif;
+            padding: 20px;
+        }
+
+        #editorContainer {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 1fr 300px;
+            gap: 20px;
+        }
+
+        h1 {
+            grid-column: 1 / -1;
+            margin-bottom: 20px;
+        }
+
+        #canvas {
+            border: 2px solid #fff;
+            background: #000;
+            cursor: crosshair;
+            display: block;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+        }
+
+        .panel {
+            background: #2a2a2a;
+            padding: 20px;
+            border-radius: 8px;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+
+        .section {
+            margin-bottom: 25px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid #444;
+        }
+
+        .section:last-child {
+            border-bottom: none;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: bold;
+            color: #aaa;
+        }
+
+        input[type="text"],
+        input[type="number"],
+        select {
+            width: 100%;
+            padding: 8px;
+            background: #333;
+            border: 1px solid #555;
+            color: #fff;
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
+
+        input[type="text"]:focus,
+        input[type="number"]:focus,
+        select:focus {
+            outline: none;
+            border-color: #0099ff;
+            background: #3a3a3a;
+        }
+
+        button {
+            width: 100%;
+            padding: 10px;
+            background: #0099ff;
+            border: none;
+            color: #fff;
+            cursor: pointer;
+            border-radius: 4px;
+            font-weight: bold;
+            margin-bottom: 8px;
+            transition: all 0.3s;
+        }
+
+        button:hover {
+            background: #00ccff;
+        }
+
+        button.danger {
+            background: #cc3333;
+        }
+
+        button.danger:hover {
+            background: #ff4444;
+        }
+
+        .tool-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .tool-button {
+            padding: 15px;
+            border: 2px solid #555;
+            background: #333;
+            cursor: pointer;
+            border-radius: 4px;
+            transition: all 0.3s;
+        }
+
+        .tool-button:hover {
+            border-color: #0099ff;
+        }
+
+        .tool-button.active {
+            background: #0099ff;
+            border-color: #0099ff;
+            font-weight: bold;
+        }
+
+        .tool-button.empty { color: #666; }
+        .tool-button.path { color: #888; }
+        .tool-button.goal { color: #0f0; }
+
+        .level-list {
+            max-height: 300px;
+            overflow-y: auto;
+            background: #333;
+            border-radius: 4px;
+            padding: 10px;
+            margin-bottom: 15px;
+        }
+
+        .level-item {
+            padding: 8px;
+            background: #444;
+            margin-bottom: 5px;
+            border-radius: 3px;
+            cursor: pointer;
+            border: 2px solid transparent;
+            transition: all 0.3s;
+        }
+
+        .level-item:hover {
+            background: #555;
+            border-color: #0099ff;
+        }
+
+        .level-item.active {
+            background: #0099ff;
+            border-color: #00ffff;
+        }
+
+        .info-box {
+            background: #333;
+            padding: 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #aaa;
+            margin-bottom: 10px;
+            border-left: 3px solid #0099ff;
+        }
+
+        .keyboard-shortcuts {
+            font-size: 11px;
+            color: #666;
+            line-height: 1.6;
+        }
+
+        .orb-item {
+            padding: 10px;
+            background: #444;
+            margin-bottom: 8px;
+            border-radius: 3px;
+            border: 2px solid transparent;
+            transition: all 0.3s;
+            font-size: 13px;
+        }
+
+        .orb-item:hover {
+            background: #555;
+            border-color: #0099ff;
+        }
+
+        .orb-item.editing {
+            background: #FF2222;
+            border-color: #FF5555;
+        }
+
+        .tool-button[data-tool="2"] { color: #0066CC; }
+        .tool-button[data-tool="3"] { color: #FF8800; }
+        .tool-button[data-tool="4"] { color: #0f0; }
+        .tool-button[data-tool="6"] { color: #cc3300; }
+    </style>
+</head>
+<body>
+    <h1>✏️ Level Editor</h1>
+
+    <div id="editorContainer">
+        <div>
+            <canvas id="canvas"></canvas>
+        </div>
+
+        <div class="panel">
+            <div class="section">
+                <h3>Tools</h3>
+                <div class="tool-grid">
+                    <button class="tool-button empty active" data-tool="0" title="Empty space">
+                        Empty
+                    </button>
+                    <button class="tool-button path" data-tool="1" title="Wall">
+                        Wall
+                    </button>
+                    <button class="tool-button" data-tool="2" title="Water">
+                        Water
+                    </button>
+                    <button class="tool-button" data-tool="3" title="Block">
+                        Block
+                    </button>
+                    <button class="tool-button goal" data-tool="4" title="Exit">
+                        Exit
+                    </button>
+
+                    <button class="tool-button" data-tool="6" title="Lava">
+                        Lava
+                    </button>
+                    <button class="tool-button" data-tool="player" title="Start">
+                        Start
+                    </button>
+                </div>
+            </div>
+
+            <div class="section">
+                <h3>Level</h3>
+                <label>Name:</label>
+                <input type="text" id="levelName" placeholder="Level name">
+
+                <label>Width:</label>
+                <input type="number" id="levelWidth" min="5" max="30" value="10">
+
+                <label>Height:</label>
+                <input type="number" id="levelHeight" min="5" max="20" value="8">
+
+                <label>Instructions:</label>
+                <textarea id="levelInstructions" rows="3" placeholder="Short instructions for the player"></textarea>
+
+                <button onclick="resizeLevel()">Resize</button>
+                <button onclick="clearLevel()">Clear</button>
+            </div>
+
+            <div class="section">
+                <h3>Orbs</h3>
+                <div class="level-list" id="orbsList" style="min-height: 80px;"></div>
+            </div>
+
+            <div class="section">
+                <h3>Levels</h3>
+                <div class="level-list" id="levelList"></div>
+                <button onclick="newLevel()">+ New</button>
+                <button class="danger" onclick="deleteLevel()">Delete</button>
+            </div>
+
+            <div class="section">
+                <h3>Editing</h3>
+                <button onclick="saveToFile()">💾 Download levels.json</button>
+                <button onclick="loadFromFile()">📂 Load levels.json</button>
+
+                <div class="info-box" style="margin-top: 15px;">
+                    <strong>Keyboard shortcuts:</strong>
+                    <div class="keyboard-shortcuts">
+                        • Numbers: Tools<br>
+                        • P: Start player<br>
+                        • 6: Lava<br>
+                        • Ctrl+Z: Undo<br>
+                        • Ctrl+S: Save
+                    </div>
+                    <div style="margin-top:8px; font-size:12px; color:#ccc;">Tip: <strong>Lava</strong> kills like water; blocks pushed into lava disappear and do NOT create bridges.</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <input type="file" id="fileInput" style="display: none;" accept=".json">
+
+    <script src="editor.js"></script>
+</body>
+</html>

@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tile game</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: linear-gradient(135deg, #1a1a1a 0%, #2a2a2a 100%);
+            font-family: Arial, sans-serif;
+            color: #fff;
+        }
+
+        .menu {
+            text-align: center;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 50px;
+            border-radius: 15px;
+            box-shadow: 0 0 30px rgba(0, 153, 255, 0.3);
+        }
+
+        h1 {
+            font-size: 48px;
+            margin-bottom: 20px;
+            text-shadow: 0 0 10px rgba(0, 153, 255, 0.5);
+        }
+
+        .subtitle {
+            font-size: 18px;
+            color: #aaa;
+            margin-bottom: 40px;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+            flex-direction: column;
+        }
+
+        a {
+            display: inline-block;
+            padding: 15px 40px;
+            font-size: 18px;
+            font-weight: bold;
+            border-radius: 8px;
+            text-decoration: none;
+            transition: all 0.3s;
+            cursor: pointer;
+            border: 2px solid;
+        }
+
+        .play-btn {
+            background: #0099FF;
+            border-color: #00CCFF;
+            color: #fff;
+        }
+
+        .play-btn:hover {
+            background: #00CCFF;
+            box-shadow: 0 0 20px rgba(0, 204, 255, 0.5);
+            transform: scale(1.05);
+        }
+
+        .editor-btn {
+            background: #00AA00;
+            border-color: #00FF00;
+            color: #fff;
+        }
+
+        .editor-btn:hover {
+            background: #00FF00;
+            color: #000;
+            box-shadow: 0 0 20px rgba(0, 255, 0, 0.5);
+            transform: scale(1.05);
+        }
+
+        .info {
+            margin-top: 40px;
+            font-size: 14px;
+            color: #666;
+            border-top: 1px solid #444;
+            padding-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="menu">
+        <h1>Tile game</h1>
+
+        <div class="button-group">
+            <a href="game.html" class="play-btn">PLAY</a>
+            <a href="editor.html" class="editor-btn">EDITOR</a>
+        </div>
+    </div>
+</body>
+</html>

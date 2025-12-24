@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tile game</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: #1a1a1a;
+            font-family: Arial, sans-serif;
+            color: #fff;
+        }
+
+        #gameContainer {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+        }
+
+        h1 {
+            margin-bottom: 10px;
+        }
+
+        #levelSelect {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 10px;
+            margin-bottom: 20px;
+            padding: 20px;
+            background: #2a2a2a;
+            border-radius: 8px;
+            width: 100%;
+            max-width: 600px;
+        }
+
+        .levelButton {
+            padding: 15px;
+            background: #333;
+            border: 2px solid #444;
+            color: #fff;
+            cursor: pointer;
+            border-radius: 5px;
+            font-weight: bold;
+            transition: all 0.3s;
+        }
+
+        .levelButton:hover:not(:disabled) {
+            background: #444;
+            border-color: #666;
+        }
+
+        .levelButton.available {
+            background: #0066cc;
+            border-color: #0099ff;
+        }
+
+        .levelButton.available:hover {
+            background: #0099ff;
+        }
+
+        .levelButton.completed {
+            background: #00aa00;
+            border-color: #00ff00;
+        }
+
+        .levelButton:disabled {
+            background: #1a1a1a;
+            border-color: #333;
+            color: #666;
+            cursor: not-allowed;
+        }
+
+        #gameView {
+            display: none;
+        }
+
+        #gameView.active {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+        }
+
+        #canvas {
+            border: 3px solid #fff;
+            background: #000;
+            display: block;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+        }
+
+        .controls {
+            text-align: center;
+            background: #2a2a2a;
+            padding: 15px;
+            border-radius: 8px;
+            width: 100%;
+            max-width: 600px;
+        }
+
+        .controls p {
+            margin-bottom: 10px;
+            color: #aaa;
+        }
+
+        button {
+            padding: 10px 20px;
+            background: #cc3333;
+            border: none;
+            color: #fff;
+            cursor: pointer;
+            border-radius: 5px;
+            font-weight: bold;
+            transition: all 0.3s;
+        }
+
+        button:hover {
+            background: #ff4444;
+        }
+
+        #levelInfo {
+            text-align: center;
+            color: #aaa;
+        }
+
+        .win-message {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 150, 0, 0.95);
+            padding: 40px;
+            border-radius: 10px;
+            text-align: center;
+            z-index: 1000;
+            font-size: 24px;
+            display: none;
+        }
+
+        .win-message.show {
+            display: block;
+            animation: popIn 0.5s ease;
+        }
+
+        @keyframes popIn {
+            0% { transform: translate(-50%, -50%) scale(0.5); opacity: 0; }
+            100% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <h1>Tile game</h1>
+
+        <div id="levelSelectWrapper">
+            <div id="levelSelect"></div>
+        </div>
+
+        <div id="gameView">
+            <div id="levelInfo"></div>
+            <div id="levelInstructions" style="white-space: pre-wrap; color: #ddd; margin-bottom: 8px;"></div>
+            <canvas id="canvas"></canvas>
+            <div class="controls">
+                <p>W/A/S/D — move. <button id="backButton">Back</button></p>
+            </div>
+        </div>
+    </div>
+
+    <div id="winMessage" class="win-message"></div>
+
+    <script src="game.js"></script>
+</body>
+</html>
