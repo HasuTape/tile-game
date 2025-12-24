@@ -15,7 +15,34 @@ let playerRender = { xPos: 0, yPos: 0, startX: 0, startY: 0, destX: 0, destY: 0,
 let playerSelected = false;
 let moveHighlights = []; // array of {x,y} tiles that are valid moves when player is selected
 let selectionLocked = false; // true while a move is in progress and highlights shouldn't be cleared
+let moveInProgress = false; // guard to prevent overlapping move actions
+let keyHandlerAttached = false; // whether we attached the keydown handler (avoid duplicates)
+let canvasHandlerAttached = false; // whether canvas pointer handler is attached (attach once globally)
 
+// Backward-compat fallback: no-op wait helper so older/cached code paths don't throw
+if (typeof window !== 'undefined' && typeof window.waitForBlocksToFinish !== 'function') {
+    window.waitForBlocksToFinish = function(chain) { return Promise.resolve(); };
+}
+
+// Attach the canvas pointer handler once at script init (prevents duplicate handlers across levels)
+(function attachCanvasGlobal() {
+    function tryAttach() {
+        const c = document.getElementById('canvas');
+        if (c && !canvasHandlerAttached) {
+            canvas = c;
+            ctx = canvas.getContext('2d');
+            canvas.addEventListener('pointerdown', canvasPointerDown);
+            canvasHandlerAttached = true;
+            console.debug('attachCanvasGlobal: canvas pointerdown handler attached');
+        }
+    }
+
+    if (document.readyState === 'complete' || document.readyState === 'interactive') {
+        tryAttach();
+    } else {
+        document.addEventListener('DOMContentLoaded', tryAttach);
+    }
+})();
 
 const TILE_SIZE = 40;
 // assign dependent speeds after constants are initialized
@@ -235,6 +262,14 @@ function startLevel(levelId) {
     currentLevelId = levelId;
     currentLevel = JSON.parse(JSON.stringify(levels[levelId]));
     
+    // Reset move guard on level start
+    moveInProgress = false;
+    selectionLocked = false;
+    blocksSliding = false;
+
+    // Ensure per-level move distance is defined and sensible (default 1)
+    currentLevel.moveDistance = Number.isFinite(currentLevel.moveDistance) && currentLevel.moveDistance > 0 ? Math.floor(currentLevel.moveDistance) : 1;
+    
     if (!currentLevel || !currentLevel.playerStart || currentLevel.playerStart.length < 2) {
         console.error('Invalid level or playerStart:', currentLevel);
         currentLevel.playerStart = [0, 0];
@@ -264,6 +299,20 @@ function startLevel(levelId) {
     
     gameRunning = true;
     
+    // Attach key handler at level start (remove any previous and reattach to avoid duplicates)
+    try {
+        if (keyHandlerAttached) {
+            document.removeEventListener('keydown', handleKeyPress);
+            keyHandlerAttached = false;
+            console.debug('startLevel: removed previous key handler');
+        }
+        document.addEventListener('keydown', handleKeyPress);
+        keyHandlerAttached = true;
+        console.debug('startLevel: keydown handler attached');
+    } catch (e) {
+        console.warn('startLevel: failed to attach key handler', e);
+    }
+
     console.log('Starting level', levelId, 'Player at:', playerPos, 'Map size:', currentLevel.width, 'x', currentLevel.height);
     console.log('Game version: 1.1 (Safe Spawn)');
     
@@ -342,34 +391,92 @@ function getCanvasTileFromEvent(e) {
 function computeMoveHighlights() {
     moveHighlights = [];
     if (!currentLevel) return;
+
+    const maxSteps = Number.isFinite(currentLevel.moveDistance) && currentLevel.moveDistance > 0 ? Math.floor(currentLevel.moveDistance) : 1;
     const dirs = [ {dx:0,dy:-1}, {dx:0,dy:1}, {dx:-1,dy:0}, {dx:1,dy:0} ];
+
+    // Helper to check pushability against simulated blocks/tiles
+    const canPushInSim = (tx, ty, simBlocks, simTiles) => {
+        if (tx < 0 || tx >= currentLevel.width || ty < 0 || ty >= currentLevel.height) return false;
+        const tile = simTiles[ty][tx];
+        const hasBlock = simBlocks.some(b => b.x === tx && b.y === ty);
+        return (tile === TILE_TYPES.EMPTY || tile === TILE_TYPES.WATER || tile === TILE_TYPES.GOAL || tile === TILE_TYPES.LAVA) && !hasBlock;
+    };
+
     dirs.forEach(d => {
-        const nx = playerPos.x + d.dx;
-        const ny = playerPos.y + d.dy;
-        if (nx < 0 || nx >= currentLevel.width || ny < 0 || ny >= currentLevel.height) return;
-        // If can move there directly
-        if (canMoveTo(nx, ny)) {
-            moveHighlights.push({ x: nx, y: ny });
-            return;
-        }
-        // If there's a block, check if it can be pushed
-        const block = pushableBlocks.find(b => b.x === nx && b.y === ny);
-        if (block) {
-            // collect chain
+        // create simulation copies so we can reason multiple steps ahead
+        const simBlocks = pushableBlocks.map(b => ({ x: b.x, y: b.y }));
+        const simTiles = currentLevel.tiles.map(r => r.slice());
+        let px = playerPos.x, py = playerPos.y;
+
+        for (let step = 1; step <= maxSteps; step++) {
+            const nx = px + d.dx;
+            const ny = py + d.dy;
+            // bounds/wall check
+            if (!currentLevel || nx < 0 || nx >= currentLevel.width || ny < 0 || ny >= currentLevel.height) break;
+            const tile = simTiles[ny][nx];
+            if (tile === TILE_TYPES.WALL) break;
+
+            // Is there a simulated block at nx,ny ?
+            const blockIdx = simBlocks.findIndex(b => b.x === nx && b.y === ny);
+            if (blockIdx === -1) {
+                // empty/goal/water/lava tile — we can step here
+                moveHighlights.push({ x: nx, y: ny });
+                // advance the simulated player position and continue
+                px = nx; py = ny;
+                // If this is an absorbing tile (water/lava/goal), stop further steps
+                if (tile === TILE_TYPES.WATER || tile === TILE_TYPES.LAVA || tile === TILE_TYPES.GOAL) break;
+                continue;
+            }
+
+            // There's a block — collect the chain in simBlocks
+            const chainIdxs = [];
             let cx = nx, cy = ny;
-            const chain = [];
             while (true) {
-                const bb = pushableBlocks.find(b => b.x === cx && b.y === cy);
-                if (!bb) break;
-                chain.push(bb);
+                const idx = simBlocks.findIndex(b => b.x === cx && b.y === cy);
+                if (idx === -1) break;
+                chainIdxs.push(idx);
                 cx += d.dx; cy += d.dy;
             }
-            const last = chain[chain.length - 1];
-            const tx = last.x + d.dx;
-            const ty = last.y + d.dy;
-            if (canPushBlockTo(tx, ty)) {
-                moveHighlights.push({ x: nx, y: ny });
+
+            const lastIdx = chainIdxs[chainIdxs.length - 1];
+            const lastBlock = simBlocks[lastIdx];
+            const tx = lastBlock.x + d.dx;
+            const ty = lastBlock.y + d.dy;
+
+            // Check whether we can push the chain in the simulated world
+            if (!canPushInSim(tx, ty, simBlocks, simTiles)) break;
+
+            // Apply simulated push: handle water/lava interactions on the leading tile
+            const leadTile = simTiles[ty][tx];
+            if (leadTile === TILE_TYPES.WATER) {
+                // leading block falls into water -> remove it and create a bridge
+                simBlocks.splice(lastIdx, 1);
+                simTiles[ty][tx] = TILE_TYPES.EMPTY;
+                // shift remaining chain
+                for (let i = chainIdxs.length - 2; i >= 0; i--) {
+                    const bi = simBlocks[chainIdxs[i]];
+                    bi.x += d.dx; bi.y += d.dy;
+                }
+            } else if (leadTile === TILE_TYPES.LAVA) {
+                // leading block falls into lava -> remove it, lava remains
+                simBlocks.splice(lastIdx, 1);
+                for (let i = chainIdxs.length - 2; i >= 0; i--) {
+                    const bi = simBlocks[chainIdxs[i]];
+                    bi.x += d.dx; bi.y += d.dy;
+                }
+            } else {
+                // normal shift
+                for (let i = chainIdxs.length - 1; i >= 0; i--) {
+                    const bi = simBlocks[chainIdxs[i]];
+                    bi.x += d.dx; bi.y += d.dy;
+                }
             }
+
+            // The tile with the block (nx,ny) is a valid action (push) — highlight it
+            moveHighlights.push({ x: nx, y: ny });
+            // Advance the simulated player and continue
+            px = nx; py = ny;
         }
     });
 }
@@ -430,7 +537,16 @@ function canvasPointerDown(e) {
     }
 
     // If selection is locked (move in progress), ignore taps
-    if (selectionLocked) return;
+    // Defensive: if selectionLocked is set but nothing is moving, clear it so user can continue
+    if (selectionLocked) {
+        const playerMoving = !!(playerRender && playerRender.moving);
+        const blocksMoving = pushableBlocks.some(b => b.moving);
+        if (!playerMoving && !blocksMoving) {
+            selectionLocked = false;
+        } else {
+            return;
+        }
+    }
 
     // If we are selecting, check if tapped a highlighted tile
     const found = moveHighlights.find(h => h.x === pos.x && h.y === pos.y);
@@ -459,37 +575,18 @@ function canvasPointerDown(e) {
     clearPlayerSelection();
 }
 
-function sendMobileKey(key) {
-    if (!key) return;
-    const ev = { key: key, preventDefault: () => {} };
-    handleKeyPress(ev);
-}
 
 function setupInputs() {
-    document.removeEventListener('keydown', handleKeyPress);
-    document.addEventListener('keydown', handleKeyPress);
+    // Key handler is attached at start of each level (in `startLevel`) to avoid duplicates across level transitions.
     const backBtn = document.getElementById('backButton');
     if (backBtn) backBtn.onclick = backToMenu;
     else console.warn('setupInputs: No #backButton found in DOM.');
 
-    // Mobile controls (pointer-based) — buttons send equivalent key presses
-    const mobileButtons = document.querySelectorAll('#mobileControls button[data-key]');
-    if (mobileButtons && mobileButtons.length > 0) {
-        mobileButtons.forEach(btn => {
-            btn.addEventListener('pointerdown', (e) => {
-                e.preventDefault();
-                btn.classList.add('active');
-                const k = btn.getAttribute('data-key');
-                sendMobileKey(k);
-            });
-            ['pointerup','pointercancel','pointerleave'].forEach(evName => btn.addEventListener(evName, () => btn.classList.remove('active')));
-        });
-    }
-
-    // Canvas tap handler for mobile tap-to-move
-    if (canvas) {
-        canvas.removeEventListener('pointerdown', canvasPointerDown);
+    // Canvas pointer handler is attached globally during script init. No need to reattach here.
+    if (!canvasHandlerAttached && canvas) {
         canvas.addEventListener('pointerdown', canvasPointerDown);
+        canvasHandlerAttached = true;
+        console.debug('setupInputs: attached canvas handler (fallback)');
     }
 }
 
@@ -498,6 +595,15 @@ function handleKeyPress(e) {
 
     const key = e.key.toLowerCase();
     
+    // If there's an accidental lock, clear it when nothing is moving
+    if (selectionLocked) {
+        const playerMoving = !!(playerRender && playerRender.moving);
+        const blocksMoving = pushableBlocks.some(b => b.moving);
+        if (!playerMoving && !blocksMoving) {
+            selectionLocked = false;
+        }
+    }
+
     // While blocks are moving, ignore movement keys (cannot change direction)
     if (blocksSliding && ['w','a','s','d'].includes(key)) {
         return;
@@ -551,115 +657,130 @@ function handleKeyPress(e) {
     if (canMoveTo(newX, newY) || pushableBlocks.some(b => b.x === newX && b.y === newY)) {
         // A valid move/push was initiated — clear highlights immediately for this action
         clearHighlightsForAction();
-        // Collect all blocks in a line that we are pushing
-        let blocksToPush = [];
-        let checkX = newX;
-        let checkY = newY;
-        
-        while (true) {
-            const block = pushableBlocks.find(b => b.x === checkX && b.y === checkY);
-            if (!block) break;
-            blocksToPush.push(block);
-            checkX += dx;
-            checkY += dy;
-        }
 
-        // If we found blocks, check if the LAST block can move into the target space
-        if (blocksToPush.length > 0) {
-            const lastBlock = blocksToPush[blocksToPush.length - 1];
-            const targetX = lastBlock.x + dx;
-            const targetY = lastBlock.y + dy;
+        // Multi-step move: allow up to `moveDistance` tiles per action (configured per level; default is 1)
+        const maxSteps = Number.isFinite(currentLevel.moveDistance) && currentLevel.moveDistance > 0 ? Math.floor(currentLevel.moveDistance) : 1;
+        // Record a single history state for the entire action
+        moveHistory.push(currentState);
 
-            if (canPushBlockTo(targetX, targetY)) {
-                 // Push successful! Record history
-                 moveHistory.push(currentState);
-                 
-                 // Move blocks from last to first to avoid overlap issues
-                 // But wait, we need to handle special interactions like water for the LEAD block
-                 
-                 // Actually, we just shift them all by dx, dy. 
-                 // The one at the front (furthest from player) hits the target tile.
-                 
-                 const targetTile = currentLevel.tiles[targetY][targetX];
-                 
-                 if (targetTile === TILE_TYPES.WATER) {
-                     // The leading block falls into water and creates a bridge
-                     pushableBlocks.splice(pushableBlocks.indexOf(lastBlock), 1);
-                     currentLevel.tiles[targetY][targetX] = TILE_TYPES.EMPTY; // Bridge!
-                     
-                     // Move the rest
-                     for (let i = blocksToPush.length - 2; i >= 0; i--) {
-                         blocksToPush[i].x += dx;
-                         blocksToPush[i].y += dy;
-                         blocksToPush[i].xPos = blocksToPush[i].x * TILE_SIZE;
-                         blocksToPush[i].yPos = blocksToPush[i].y * TILE_SIZE;
-                     }
-                 } else if (targetTile === TILE_TYPES.LAVA) {
-                     // Block falls into lava and disappears; lava remains (no bridge)
-                     pushableBlocks.splice(pushableBlocks.indexOf(lastBlock), 1);
-                     for (let i = blocksToPush.length - 2; i >= 0; i--) {
-                         blocksToPush[i].x += dx;
-                         blocksToPush[i].y += dy;
-                         blocksToPush[i].xPos = blocksToPush[i].x * TILE_SIZE;
-                         blocksToPush[i].yPos = blocksToPush[i].y * TILE_SIZE;
-                     }
-                 } else {
-                     // Normal move for all blocks
-                     blocksToPush.forEach(b => {
-                         b.x += dx;
-                         b.y += dy;
-                         b.xPos = b.x * TILE_SIZE;
-                         b.yPos = b.y * TILE_SIZE;
-                     });
-                 }
-                 
-                 playerPos.x = newX;
-                 playerPos.y = newY;
-                 // Recompute current chain (some blocks may have been removed when pushing into water/lava)
-                 let currentChain = [];
-                 let cx = newX, cy = newY;
-                 while (true) {
-                     const b = pushableBlocks.find(b => b.x === cx && b.y === cy);
-                     if (!b) break;
-                     currentChain.push(b);
-                     cx += dx; cy += dy;
-                 }
-                 // If the front block is movable, slide the chain one step
-                 const leadBlock = currentChain[currentChain.length - 1];
-                 // Animate player's step into the tile we just moved into
-                 movePlayerToTile(newX, newY);
-                 // Start chain animation and then move player into the freed space
-                 blocksSliding = true;
-                 slideBlocksChainDiscrete(currentChain, dx, dy);
-                 waitForBlocksToFinish(currentChain).then(() => {
-                     blocksSliding = false;
-                     movePlayerToTile(newX, newY);
-                     // Ensure selection is cleared after the movement finishes
-                     clearPlayerSelection();
-                 });
-                 return; 
+        const doSteps = async () => {
+            for (let step = 0; step < maxSteps; step++) {
+                const nx = playerPos.x + dx;
+                const ny = playerPos.y + dy;
 
-                 // Move player into the tile
-                 movePlayerToTile(newX, newY);
-                 return; 
+                // Blocked by wall/out-of-bounds
+                if (!canMoveTo(nx, ny) && !pushableBlocks.some(b => b.x === nx && b.y === ny)) {
+                    break;
+                }
+
+                // Collect any blocks in the line
+                const blocksToPush = [];
+                let cx = nx, cy = ny;
+                while (true) {
+                    const block = pushableBlocks.find(b => b.x === cx && b.y === cy);
+                    if (!block) break;
+                    blocksToPush.push(block);
+                    cx += dx; cy += dy;
+                }
+
+                if (blocksToPush.length > 0) {
+                    const lastBlock = blocksToPush[blocksToPush.length - 1];
+                    const targetX = lastBlock.x + dx;
+                    const targetY = lastBlock.y + dy;
+
+                    if (!canPushBlockTo(targetX, targetY)) break;
+
+                    const targetTile = currentLevel.tiles[targetY][targetX];
+                    if (targetTile === TILE_TYPES.WATER) {
+                        // Lead block falls and creates bridge
+                        pushableBlocks.splice(pushableBlocks.indexOf(lastBlock), 1);
+                        currentLevel.tiles[targetY][targetX] = TILE_TYPES.EMPTY;
+                        for (let i = blocksToPush.length - 2; i >= 0; i--) {
+                            blocksToPush[i].x += dx;
+                            blocksToPush[i].y += dy;
+                            blocksToPush[i].xPos = blocksToPush[i].x * TILE_SIZE;
+                            blocksToPush[i].yPos = blocksToPush[i].y * TILE_SIZE;
+                        }
+                    } else if (targetTile === TILE_TYPES.LAVA) {
+                        // Lead block falls into lava
+                        pushableBlocks.splice(pushableBlocks.indexOf(lastBlock), 1);
+                        for (let i = blocksToPush.length - 2; i >= 0; i--) {
+                            blocksToPush[i].x += dx;
+                            blocksToPush[i].y += dy;
+                            blocksToPush[i].xPos = blocksToPush[i].x * TILE_SIZE;
+                            blocksToPush[i].yPos = blocksToPush[i].y * TILE_SIZE;
+                        }
+                    } else {
+                        // Normal shift
+                        blocksToPush.forEach(b => {
+                            b.x += dx; b.y += dy;
+                            b.xPos = b.x * TILE_SIZE; b.yPos = b.y * TILE_SIZE;
+                        });
+                    }
+
+                    // Move player into the tile
+                    playerPos.x = nx; playerPos.y = ny;
+                    movePlayerToTile(playerPos.x, playerPos.y);
+
+                    // Recompute chain for animation
+                    let currentChain = [];
+                    let qx = playerPos.x, qy = playerPos.y;
+                    while (true) {
+                        const b = pushableBlocks.find(b => b.x === qx && b.y === qy);
+                        if (!b) break;
+                        currentChain.push(b);
+                        qx += dx; qy += dy;
+                    }
+
+                    if (currentChain.length > 0) {
+                        blocksSliding = true;
+                        slideBlocksChainDiscrete(currentChain, dx, dy);
+                        try {
+                            if (typeof window !== 'undefined' && typeof window.waitForBlocksToFinish === 'function') {
+                                await window.waitForBlocksToFinish(currentChain);
+                            } else {
+                                // Fallback: no wait available
+                                await Promise.resolve();
+                            }
+                        } catch (err) {
+                            console.warn('waitForBlocksToFinish failed or missing:', err);
+                        }
+                        blocksSliding = false;
+                        movePlayerToTile(playerPos.x, playerPos.y);
+                    }
+
+                    // after handling push, continue to next step unless something stopped us
+                    continue; // next step
+                }
+
+                // No blocks in the way: simple move
+                playerPos.x = nx; playerPos.y = ny;
+                movePlayerToTile(playerPos.x, playerPos.y);
+
+                // If we stepped into water/lava/goal, stop further steps
+                const tile = currentLevel.tiles[playerPos.y][playerPos.x];
+                if (tile === TILE_TYPES.WATER || tile === TILE_TYPES.LAVA || tile === TILE_TYPES.GOAL) break;
+
+                // otherwise continue next step
+                continue;
             }
-            // If chain cannot move, do nothing
-        } else {
-            // No blocks, simple move (animate player)
-            moveHistory.push(currentState);
-            // Move player tile coords immediately and animate to the tile
-            playerPos.x = newX;
-            playerPos.y = newY;
-            movePlayerToTile(newX, newY);
-            const steppedTile = currentLevel.tiles[newY][newX];
 
-            // For water/lava/goal death/win will be handled on arrival
-            return;
-        }
+            // Ensure selection is cleared after the multi-step action finishes
+            clearPlayerSelection();
+        };
 
+        // Prevent overlapping moves
+        if (moveInProgress) return;
+        moveInProgress = true;
+
+        // Run steps (fire-and-forget; errors should not block the UI)
+        doSteps().catch(err => { console.error('multi-step move error', err); blocksSliding = false; clearPlayerSelection(); }).finally(() => { moveInProgress = false; });
+
+        // Quick update checks
         moveOrbs();
         checkCollisions();
         checkWin();
+        return;
     }
 }
 
@@ -762,6 +883,8 @@ function attemptSlideStep() {
         blocksSliding = false;
         // Now move player into that tile (immediate, no animation)
         movePlayerToTile(nextX, nextY);
+        // Defensive: ensure any selection locks are cleared (in case this was triggered while selectionLocked)
+        clearPlayerSelection();
         return;
     }
 
@@ -794,12 +917,57 @@ function slideBlocksChainDiscrete(chain, dx, dy) {
 
 // No async waiting required for discrete block movement.
 
+function waitForBlocksToFinish(chain) {
+    if (!chain || chain.length === 0) return Promise.resolve();
+    return new Promise(resolve => {
+        const id = setInterval(() => {
+            const anyMoving = chain.some(b => b.moving);
+            if (!anyMoving) {
+                clearInterval(id);
+                // Defensive cleanup
+                try { chain.forEach(b => { b.moving = false; b.stepTimer = 0; }); } catch (e) {}
+                blocksSliding = false;
+                selectionLocked = false;
+                resolve();
+            }
+        }, 40);
+        // safety timeout
+        setTimeout(() => {
+            clearInterval(id);
+            try { chain.forEach(b => { b.moving = false; b.stepTimer = 0; }); } catch (e) {}
+            blocksSliding = false;
+            selectionLocked = false;
+            resolve();
+        }, 5000);
+    });
+}
+// Ensure the helper is available globally so event handlers and older code paths can call it
+if (typeof window !== 'undefined') window.waitForBlocksToFinish = waitForBlocksToFinish;
+
 function updateEntities(dt) {
     // Update blocks (handle step timers and short animations)
     pushableBlocks.forEach(b => b.update(dt));
 
     // Orbs and other entity updates
     moveOrbs();
+
+    // Defensive cleanup: if nothing is moving, ensure locks/flags are cleared
+    const anyBlockMoving = pushableBlocks.some(b => b.moving);
+    const playerMoving = !!(playerRender && playerRender.moving);
+    if (!anyBlockMoving && !playerMoving) {
+        if (blocksSliding) {
+            console.debug('updateEntities: clearing stale blocksSliding flag');
+            blocksSliding = false;
+        }
+        if (selectionLocked) {
+            console.debug('updateEntities: clearing stale selectionLocked flag');
+            selectionLocked = false;
+            // Also ensure player selection state isn't stuck
+            playerSelected = false;
+            moveHighlights = [];
+            draw();
+        }
+    }
 }
 
 function moveOrbs() {
@@ -817,6 +985,12 @@ function movePlayerToTile(tx, ty) {
     playerRender.moving = false;
     // Call arrival handler immediately to continue sliding if needed
     onPlayerArrive();
+
+    // Defensive: ensure move guard is cleared if we arrive while a previous action left it set
+    if (moveInProgress && !pushableBlocks.some(b => b.moving) && !(playerRender && playerRender.moving)) {
+        console.debug('movePlayerToTile: clearing stale moveInProgress flag');
+        moveInProgress = false;
+    }
 }
 
 function onPlayerArrive() {
@@ -869,7 +1043,10 @@ function dieLevel() {
     message.innerHTML = '<div>You died!<br><br>Try again!</div>';
     message.classList.add('show');
     
-    document.removeEventListener('keydown', handleKeyPress);
+    if (keyHandlerAttached) {
+        document.removeEventListener('keydown', handleKeyPress);
+        keyHandlerAttached = false;
+    }
     
     setTimeout(() => {
         startLevel(currentLevelId);
@@ -897,7 +1074,10 @@ function winLevel() {
     
     message.classList.add('show');
     
-    document.removeEventListener('keydown', handleKeyPress);
+    if (keyHandlerAttached) {
+        document.removeEventListener('keydown', handleKeyPress);
+        keyHandlerAttached = false;
+    }
     
     setTimeout(() => {
         backToMenu();
@@ -906,7 +1086,10 @@ function winLevel() {
 
 function backToMenu() {
     gameRunning = false;
-    document.removeEventListener('keydown', handleKeyPress);
+    if (keyHandlerAttached) {
+        document.removeEventListener('keydown', handleKeyPress);
+        keyHandlerAttached = false;
+    }
     document.getElementById('gameView').classList.remove('active');
     document.getElementById('levelSelectWrapper').style.display = 'block';
     document.getElementById('winMessage').classList.remove('show');
