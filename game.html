@@ -158,6 +158,15 @@
             100% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
         }
 
+        /* Mobile arrow controls */
+        .mobile-arrows { display:none; margin-top:10px; }
+        .mobile-arrows .arrow-row { display:flex; justify-content:center; gap:10px; margin-bottom:6px; }
+        .mobile-arrows .arrow { background:#0099ff; border:none; color:#fff; font-size:18px; padding:8px 12px; border-radius:6px; }
+        .mobile-arrows .arrow:hover { background:#00ccff; }
+        @media (max-width: 800px) {
+            .mobile-arrows { display:block; }
+        }
+
 
     </style>
 </head>
@@ -174,7 +183,19 @@
             <div id="levelInstructions" style="white-space: pre-wrap; color: #ddd; margin-bottom: 8px;"></div>
             <canvas id="canvas"></canvas>
             <div class="controls">
-                <p>W/A/S/D — move. <button id="backButton">Back</button></p>
+                <p style="margin-bottom:10px;">W/A/S/D — move. <button id="backButton">Back</button></p>
+
+                <!-- Mobile arrow controls (visible on narrow screens) -->
+                <div id="mobileArrows" class="mobile-arrows" aria-hidden="false">
+                    <div class="arrow-row">
+                        <button class="arrow up" onclick="mobileArrowPress('ArrowUp')">▲</button>
+                    </div>
+                    <div class="arrow-row">
+                        <button class="arrow left" onclick="mobileArrowPress('ArrowLeft')">◀</button>
+                        <button class="arrow down" onclick="mobileArrowPress('ArrowDown')">▼</button>
+                        <button class="arrow right" onclick="mobileArrowPress('ArrowRight')">▶</button>
+                    </div>
+                </div>
             </div>
 
 

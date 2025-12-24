@@ -155,65 +155,79 @@ class PushableBlock {
 let moveHistory = [];
 
 class Orb {
-    constructor(waypoints, speed) {
-        this.waypoints = waypoints;
-        this.speed = speed;
-        this.currentWaypoint = 0;
-        this.progress = 0;
-        this.x = waypoints[0][0];
-        this.y = waypoints[0][1];
-    }
-
-    update() {
-        if (this.waypoints.length < 2) return;
-
-        const nextWaypoint = this.waypoints[(this.currentWaypoint + 1) % this.waypoints.length];
-        const currentWaypoint = this.waypoints[this.currentWaypoint];
-
-        const dx = nextWaypoint[0] - currentWaypoint[0];
-        const dy = nextWaypoint[1] - currentWaypoint[1];
-        const distance = Math.sqrt(dx * dx + dy * dy);
-
-        // Normalize speed relative to distance
-        // Avoid division by zero
-        if (distance > 0) {
-            this.progress += this.speed / distance;
-        }
-
-        if (this.progress >= 1) {
-            // Overshoot handling for smooth movement
-            this.progress -= 1; 
-            this.currentWaypoint = (this.currentWaypoint + 1) % this.waypoints.length;
-            
-            // Recalculate position based on new segment
-            const nextNext = this.waypoints[(this.currentWaypoint + 1) % this.waypoints.length];
-            const nextCurr = this.waypoints[this.currentWaypoint];
-            
-            // Optional: If you want perfect snapping to waypoints, you can simplify, 
-            // but preserving progress makes it smoother if speed is high.
-            // For simplicity in this grid game, snapping is usually fine, but let's keep it smooth.
-            
-            // Re-calculate position for the remainder of the progress
-             const dX2 = nextNext[0] - nextCurr[0];
-             const dY2 = nextNext[1] - nextCurr[1];
-             this.x = nextCurr[0] + dX2 * this.progress;
-             this.y = nextCurr[1] + dY2 * this.progress;
-
+    constructor(data = {}) {
+        // data: { x, y, seq: ['w','s','wait'], idx }
+        if (Array.isArray(data.waypoints) && data.waypoints.length > 0) {
+            // Backward compat: take first waypoint as starting pos
+            this.x = data.waypoints[0][0];
+            this.y = data.waypoints[0][1];
         } else {
-            this.x = currentWaypoint[0] + dx * this.progress;
-            this.y = currentWaypoint[1] + dy * this.progress;
+            this.x = Number.isFinite(data.x) ? data.x : 0;
+            this.y = Number.isFinite(data.y) ? data.y : 0;
         }
+        this.seq = Array.isArray(data.seq) ? data.seq.slice() : (data.seq ? [data.seq] : []);
+        this.idx = Number.isFinite(data.idx) ? data.idx : 0; // next command index
     }
 
+    // Execute a single command from the sequence (one player move triggers one orb step)
+    step(pushableBlocksRef, currentLevelRef, otherOrbs) {
+        if (!this.seq || this.seq.length === 0) return;
+        const cmd = this.seq[this.idx % this.seq.length];
+        this.idx = (this.idx + 1) % this.seq.length;
+        if (!cmd) return;
+        const c = cmd.toLowerCase().trim();
+        if (c === 'wait') return;
+        const deltas = { w: {dx:0,dy:-1}, s: {dx:0,dy:1}, a: {dx:-1,dy:0}, d: {dx:1,dy:0} };
+        if (!deltas[c]) return;
+        const dx = deltas[c].dx, dy = deltas[c].dy;
+        const nx = this.x + dx, ny = this.y + dy;
+        if (!currentLevelRef) return;
+        // bounds / walls
+        if (nx < 0 || nx >= currentLevelRef.width || ny < 0 || ny >= currentLevelRef.height) return;
+        const tile = currentLevelRef.tiles[ny][nx];
+        if (tile === TILE_TYPES.WALL) return;
+        // don't move into blocks
+        const hasBlock = pushableBlocksRef.find(b => b.x === nx && b.y === ny);
+        if (hasBlock) return;
+        // don't move into other orbs
+        const collisionOrb = otherOrbs.find(o => o !== this && o.x === nx && o.y === ny);
+        if (collisionOrb) return;
+        // allowed: move
+        this.x = nx; this.y = ny;
+    }
 
-    checkCollision(x, y, radius = 0.3) {
-        const dist = Math.sqrt((this.x - x) ** 2 + (this.y - y) ** 2);
-        return dist < (1 - radius);
+    // serialize state for save/undo
+    toJSON() {
+        return { x: this.x, y: this.y, seq: this.seq.slice(), idx: this.idx };
+    }
+
+    // Simple collision check against player coords
+    checkCollision(px, py) {
+        return this.x === px && this.y === py;
     }
 }
 
 async function loadLevels() {
     try {
+        // If launched from editor (test), the editor sets localStorage.testLevel and adds ?test=1 to the URL
+        const params = new URLSearchParams(window.location.search);
+        if (params.has('test') && localStorage.getItem('testLevel')) {
+            try {
+                const obj = JSON.parse(localStorage.getItem('testLevel'));
+                if (obj && Array.isArray(obj.levels) && obj.levels.length > 0) {
+                    levels = obj.levels;
+                    console.log('Loaded test level from editor:', levels);
+                    // Start the test level immediately
+                    startLevel(0);
+                    // remove test payload to avoid accidental reuse
+                    localStorage.removeItem('testLevel');
+                    return;
+                }
+            } catch (e) {
+                console.warn('Failed to parse testLevel from localStorage', e);
+            }
+        }
+
         const response = await fetch('levels.json?v=' + new Date().getTime());
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
@@ -226,7 +240,7 @@ async function loadLevels() {
         console.error('Error loading levels:', error);
         // Fallback levels or error message could be shown here
     }
-}
+} 
 
 function setupLevelSelect() {
     const container = document.getElementById('levelSelect');
@@ -356,7 +370,7 @@ function startLevel(levelId) {
         }
     }
 
-    orbs = (currentLevel.orbs || []).map(orbData => new Orb(orbData.waypoints, orbData.speed));
+    orbs = (currentLevel.orbs || []).map(orbData => new Orb(orbData));
     
     document.getElementById('levelSelectWrapper').style.display = 'none';
     document.getElementById('gameView').classList.add('active');
@@ -554,12 +568,12 @@ function canvasPointerDown(e) {
         // compute dx/dy from current playerPos to target
         const dx = found.x - playerPos.x;
         const dy = found.y - playerPos.y;
-        // Convert to key and trigger move via handleKeyPress
+        // Convert to Arrow key and trigger move via handleKeyPress
         let key = null;
-        if (dx === -1 && dy === 0) key = 'a';
-        else if (dx === 1 && dy === 0) key = 'd';
-        else if (dx === 0 && dy === -1) key = 'w';
-        else if (dx === 0 && dy === 1) key = 's';
+        if (dx === -1 && dy === 0) key = 'ArrowLeft';
+        else if (dx === 1 && dy === 0) key = 'ArrowRight';
+        else if (dx === 0 && dy === -1) key = 'ArrowUp';
+        else if (dx === 0 && dy === 1) key = 'ArrowDown';
         if (key) {
             const ev = { key: key, preventDefault: () => {} };
             // Lock selection until movement/animations finish
@@ -589,6 +603,16 @@ function setupInputs() {
         console.debug('setupInputs: attached canvas handler (fallback)');
     }
 }
+
+// Forward mobile arrow button presses into the same key handler used for keyboard input
+function mobileArrowPress(key) {
+    const ev = { key: key, preventDefault: () => {} };
+    try {
+        handleKeyPress(ev);
+    } catch (e) {
+        console.warn('mobileArrowPress: failed to dispatch key', e);
+    }
+} 
 
 function handleKeyPress(e) {
     if (!gameRunning || !currentLevel) return;
@@ -625,6 +649,9 @@ function handleKeyPress(e) {
             playerPos = lastState.playerPos;
             pushableBlocks = lastState.pushableBlocks.map(b => new PushableBlock(b.x, b.y));
             currentLevel.tiles = JSON.parse(JSON.stringify(lastState.tiles)); // Deep copy to restore tiles (water bridges)
+            if (lastState.orbs) {
+                orbs = lastState.orbs.map(o => new Orb(o));
+            }
         }
         return;
     }
@@ -639,10 +666,10 @@ function handleKeyPress(e) {
     let dx = 0;
     let dy = 0;
     
-    if (key === 'w') { newY -= 1; dy = -1; }
-    else if (key === 's') { newY += 1; dy = 1; }
-    else if (key === 'a') { newX -= 1; dx = -1; }
-    else if (key === 'd') { newX += 1; dx = 1; }
+    if (key === 'w' || key === 'arrowup') { newY -= 1; dy = -1; }
+    else if (key === 's' || key === 'arrowdown') { newY += 1; dy = 1; }
+    else if (key === 'a' || key === 'arrowleft') { newX -= 1; dx = -1; }
+    else if (key === 'd' || key === 'arrowright') { newX += 1; dx = 1; }
     else return;
 
     e.preventDefault();
@@ -721,6 +748,8 @@ function handleKeyPress(e) {
                     // Move player into the tile
                     playerPos.x = nx; playerPos.y = ny;
                     movePlayerToTile(playerPos.x, playerPos.y);
+                    // Player moved one step — make orbs step as well
+                    stepOrbs();
 
                     // Recompute chain for animation
                     let currentChain = [];
@@ -756,6 +785,8 @@ function handleKeyPress(e) {
                 // No blocks in the way: simple move
                 playerPos.x = nx; playerPos.y = ny;
                 movePlayerToTile(playerPos.x, playerPos.y);
+                // Player moved one step — make orbs step as well
+                stepOrbs();
 
                 // If we stepped into water/lava/goal, stop further steps
                 const tile = currentLevel.tiles[playerPos.y][playerPos.x];
@@ -971,7 +1002,16 @@ function updateEntities(dt) {
 }
 
 function moveOrbs() {
-    orbs.forEach(orb => orb.update());
+    // Orbs no longer move continuously; movement happens when the player performs a step.
+    // Keep this function for compatibility (no-op).
+}
+
+function stepOrbs() {
+    if (!orbs || orbs.length === 0) return;
+    // Each orb executes its next sequence command
+    orbs.forEach(o => o.step(pushableBlocks, currentLevel, orbs));
+    // After orbs moved, check collisions (orb vs player)
+    checkCollisions();
 }
 
 function movePlayerToTile(tx, ty) {

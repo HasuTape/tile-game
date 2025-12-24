@@ -17,6 +17,21 @@ async function loadLevels() {
         level.id = index;
         if (!('instructions' in level)) level.instructions = '';
         if (!level.orbs) level.orbs = [];
+        // Migrate legacy orb data: if waypoints present but seq missing, use first waypoint as start and set a default seq
+        level.orbs.forEach(orb => {
+            if (!orb) return;
+            if (!('seq' in orb)) {
+                orb.seq = Array.isArray(orb.seq) ? orb.seq.slice() : [];
+            }
+            if ((!('x' in orb) || !('y' in orb)) && Array.isArray(orb.waypoints) && orb.waypoints.length > 0) {
+                orb.x = orb.waypoints[0][0];
+                orb.y = orb.waypoints[0][1];
+            }
+            if (!Array.isArray(orb.seq) || orb.seq.length === 0) {
+                // Default to a single wait command to avoid empty sequences
+                orb.seq = ['wait'];
+            }
+        });
     });
     if (levels.length > 0) {
         setCurrentLevel(0);
@@ -97,9 +112,16 @@ function setTile(x, y) {
         const orbIndex = parseInt(currentTool.split('-')[1]);
         if (editingOrbIndex === orbIndex) {
             if (!level.orbs[orbIndex]) {
-                level.orbs[orbIndex] = { waypoints: [], speed: 1 };
+                level.orbs[orbIndex] = { waypoints: [], speed: 1, x: x, y: y, seq: ['wait'] };
             }
-            level.orbs[orbIndex].waypoints.push([x, y]);
+            // Set starting position for the orb when editing
+            level.orbs[orbIndex].x = x;
+            level.orbs[orbIndex].y = y;
+            // Ensure seq exists
+            if (!Array.isArray(level.orbs[orbIndex].seq) || level.orbs[orbIndex].seq.length === 0) {
+                level.orbs[orbIndex].seq = ['wait'];
+            }
+            updateOrbsList();
         }
     } else {
         level.tiles[y][x] = parseInt(currentTool);
@@ -144,6 +166,18 @@ function draw() {
     }
 
     level.orbs.forEach((orb, orbIdx) => {
+        // Draw starting position if present
+        if (orb && typeof orb.x === 'number' && typeof orb.y === 'number') {
+            const opx = orb.x * TILE_SIZE + TILE_SIZE / 2;
+            const opy = orb.y * TILE_SIZE + TILE_SIZE / 2;
+            const radius = 8;
+            const isSelected = editingOrbIndex === orbIdx;
+            ctx.fillStyle = isSelected ? '#FF2222' : '#FF4444';
+            ctx.beginPath();
+            ctx.arc(opx, opy, radius, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
         if (orb && orb.waypoints) {
             orb.waypoints.forEach((wp, idx) => {
                 const px = wp[0] * TILE_SIZE + TILE_SIZE / 2;
@@ -281,12 +315,15 @@ function updateOrbsList() {
         }
 
         const wpCount = orb && orb.waypoints ? orb.waypoints.length : 0;
+        const seqPreview = orb && orb.seq ? orb.seq.join(', ') : '';
         div.innerHTML = `
-            Orb ${idx + 1}: ${wpCount} waypoints
-            <div style="font-size: 11px; color: #999;">
-                <button onclick="startEditOrb(${idx})" style="padding: 3px 8px; width: 100%; margin-top: 5px;">
-                    ${editingOrbIndex === idx ? '✓ Editing' : 'Edit'}
-                </button>
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <div>Orb ${idx + 1}</div>
+                <div style="font-size:11px; color:#999;">Seq: ${seqPreview}</div>
+            </div>
+            <div style="font-size: 11px; color: #999; margin-top:6px;">
+                <button onclick="startEditOrb(${idx})" style="padding: 3px 8px; width: 48%; margin-top: 5px;">${editingOrbIndex === idx ? '✓ Editing' : 'Edit'}</button>
+                <button onclick="deleteOrb(${idx})" class="danger" style="padding: 3px 8px; width: 48%; margin-top: 5px;">Delete</button>
             </div>
         `;
         container.appendChild(div);
@@ -297,6 +334,45 @@ function updateOrbsList() {
     addBtn.style.width = '100%';
     addBtn.onclick = addOrb;
     container.appendChild(addBtn);
+
+    // If an orb is being edited, show the orb editor below
+    if (editingOrbIndex !== null) {
+        const orb = level.orbs[editingOrbIndex];
+        const editorDiv = document.createElement('div');
+        editorDiv.style.marginTop = '12px';
+        editorDiv.style.padding = '10px';
+        editorDiv.style.background = '#222';
+        editorDiv.style.borderRadius = '4px';
+
+        editorDiv.innerHTML = `
+            <div style="font-weight:bold; margin-bottom:8px;">Orb ${editingOrbIndex + 1} Editor</div>
+            <div style="font-size:12px; color:#ddd; margin-bottom:8px;">Click on the canvas to set the starting position, or edit coordinates below.</div>
+            <div style="display:flex; gap:8px; margin-bottom:8px;">
+                <input type="number" id="orbStartX" style="width:60px;" value="${orb.x || 0}"> 
+                <input type="number" id="orbStartY" style="width:60px;" value="${orb.y || 0}">
+                <button onclick="applyOrbStart()" style="flex:1;">Apply start</button>
+            </div>
+
+            <div style="margin-bottom:8px;">
+                <div style="font-size:12px; margin-bottom:6px;">Sequence (commands):</div>
+                <div id="orbSeqContainer" style="display:flex; gap:8px; flex-wrap:wrap;">
+                </div>
+            </div>
+
+            <div style="display:flex; gap:6px; margin-bottom:6px;">
+                <button onclick="addOrbCommand(${editingOrbIndex}, 'w')">W</button>
+                <button onclick="addOrbCommand(${editingOrbIndex}, 'a')">A</button>
+                <button onclick="addOrbCommand(${editingOrbIndex}, 's')">S</button>
+                <button onclick="addOrbCommand(${editingOrbIndex}, 'd')">D</button>
+                <button onclick="addOrbCommand(${editingOrbIndex}, 'wait')">WAIT</button>
+            </div>
+
+            <div style="font-size:11px; color:#999;">Use the buttons to add commands. Dragging to reorder isn't implemented; use up/down arrows.</div>
+        `;
+
+        container.appendChild(editorDiv);
+        renderOrbSeq(orb, editingOrbIndex);
+    }
 }
 
 function startEditOrb(idx) {
@@ -313,7 +389,8 @@ function startEditOrb(idx) {
 
 function addOrb() {
     const level = levels[currentLevelIndex];
-    level.orbs.push({ waypoints: [], speed: 1 });
+    // Default orb: start at 0,0 with a single WAIT command
+    level.orbs.push({ waypoints: [], speed: 1, x: 0, y: 0, seq: ['wait'] });
     updateOrbsList();
 }
 
@@ -332,6 +409,97 @@ function clearOrbPath(idx) {
     if (level.orbs[idx]) {
         level.orbs[idx].waypoints = [];
     }
+    updateOrbsList();
+    draw();
+}
+
+function renderOrbSeq(orb, idx) {
+    const container = document.getElementById('orbSeqContainer');
+    if (!container) return;
+    container.innerHTML = '';
+    if (!orb.seq || orb.seq.length === 0) return;
+
+    orb.seq.forEach((cmd, cidx) => {
+        const chip = document.createElement('div');
+        chip.style.background = '#333';
+        chip.style.padding = '6px 8px';
+        chip.style.borderRadius = '4px';
+        chip.style.color = '#fff';
+        chip.style.display = 'flex';
+        chip.style.alignItems = 'center';
+        chip.style.gap = '6px';
+
+        const span = document.createElement('span');
+        span.textContent = cmd.toUpperCase();
+        chip.appendChild(span);
+
+        const up = document.createElement('button');
+        up.textContent = '↑';
+        up.style.padding = '2px 6px';
+        up.onclick = () => { moveOrbCommand(idx, cidx, -1); };
+        chip.appendChild(up);
+
+        const down = document.createElement('button');
+        down.textContent = '↓';
+        down.style.padding = '2px 6px';
+        down.onclick = () => { moveOrbCommand(idx, cidx, 1); };
+        chip.appendChild(down);
+
+        const rem = document.createElement('button');
+        rem.textContent = '✖';
+        rem.style.padding = '2px 6px';
+        rem.onclick = () => { removeOrbCommand(idx, cidx); };
+        chip.appendChild(rem);
+
+        container.appendChild(chip);
+    });
+}
+
+function addOrbCommand(orbIdx, cmd) {
+    saveToHistory();
+    const level = levels[currentLevelIndex];
+    const orb = level.orbs[orbIdx];
+    if (!orb) return;
+    if (!Array.isArray(orb.seq)) orb.seq = [];
+    orb.seq.push(cmd);
+    updateOrbsList();
+    renderOrbSeq(orb, orbIdx);
+}
+
+function removeOrbCommand(orbIdx, cmdIdx) {
+    saveToHistory();
+    const level = levels[currentLevelIndex];
+    const orb = level.orbs[orbIdx];
+    if (!orb || !Array.isArray(orb.seq)) return;
+    orb.seq.splice(cmdIdx, 1);
+    if (orb.seq.length === 0) orb.seq = ['wait'];
+    updateOrbsList();
+    renderOrbSeq(orb, orbIdx);
+}
+
+function moveOrbCommand(orbIdx, cmdIdx, dir) {
+    saveToHistory();
+    const level = levels[currentLevelIndex];
+    const orb = level.orbs[orbIdx];
+    if (!orb || !Array.isArray(orb.seq)) return;
+    const newIdx = cmdIdx + dir;
+    if (newIdx < 0 || newIdx >= orb.seq.length) return;
+    const tmp = orb.seq[newIdx];
+    orb.seq[newIdx] = orb.seq[cmdIdx];
+    orb.seq[cmdIdx] = tmp;
+    updateOrbsList();
+    renderOrbSeq(orb, orbIdx);
+}
+
+function applyOrbStart() {
+    const level = levels[currentLevelIndex];
+    const orb = level.orbs[editingOrbIndex];
+    if (!orb) return;
+    const sx = parseInt(document.getElementById('orbStartX').value);
+    const sy = parseInt(document.getElementById('orbStartY').value);
+    if (!Number.isFinite(sx) || !Number.isFinite(sy)) return;
+    saveToHistory();
+    orb.x = sx; orb.y = sy;
     updateOrbsList();
     draw();
 }
@@ -391,6 +559,14 @@ document.getElementById('fileInput').addEventListener('change', (e) => {
                 level.id = index;
                 if (!level.orbs) level.orbs = [];
                 if (!('instructions' in level)) level.instructions = '';
+                level.orbs.forEach(orb => {
+                    if (!orb) return;
+                    if ((!('x' in orb) || !('y' in orb)) && Array.isArray(orb.waypoints) && orb.waypoints.length > 0) {
+                        orb.x = orb.waypoints[0][0];
+                        orb.y = orb.waypoints[0][1];
+                    }
+                    if (!Array.isArray(orb.seq) || orb.seq.length === 0) orb.seq = ['wait'];
+                });
             });
             
             if (levels.length > 0) {
@@ -411,6 +587,41 @@ function updateLevelName() {
     const idx = currentLevelIndex;
     levels[idx].name = document.getElementById('levelName').value;
     levels[idx].instructions = document.getElementById('levelInstructions').value;
+}
+
+// Open the current level in the game as a test. The level is stored to localStorage and game.html is opened with ?test=1
+function playCurrentLevel() {
+    updateLevelName();
+    const level = JSON.parse(JSON.stringify(levels[currentLevelIndex]));
+
+    // Ensure orbs have x,y and seq fields for runtime
+    level.orbs = (level.orbs || []).map(o => {
+        const orb = Object.assign({}, o);
+        if ((!('x' in orb) || !('y' in orb)) && Array.isArray(orb.waypoints) && orb.waypoints.length > 0) {
+            orb.x = orb.waypoints[0][0];
+            orb.y = orb.waypoints[0][1];
+        }
+        if (!Array.isArray(orb.seq) || orb.seq.length === 0) orb.seq = ['wait'];
+        return orb;
+    });
+
+    const payload = { levels: [level] };
+    try {
+        localStorage.setItem('testLevel', JSON.stringify(payload));
+    } catch (e) {
+        alert('Failed to store test level: ' + e);
+        return;
+    }
+
+    // Try opening in a new tab; if blocked, fall back to same-tab navigation
+    try {
+        const w = window.open('game.html?test=1', '_blank');
+        if (!w) {
+            window.location.href = 'game.html?test=1';
+        }
+    } catch (e) {
+        window.location.href = 'game.html?test=1';
+    }
 }
 
 document.querySelectorAll('.tool-button').forEach(btn => {
