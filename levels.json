@@ -784,7 +784,7 @@
     {
       "id": 7,
       "name": "Nwm",
-      "instructions": "Left, wait, wait, Right, wait, wait",
+      "instructions": "Right, wait, wait, left, wait, wait",
       "community": false,
       "width": 10,
       "height": 8,
