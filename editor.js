@@ -158,6 +158,9 @@ function draw() {
             } else if (tile === 4) {
                 ctx.fillStyle = '#00FF00';
                 ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+            } else if (tile === 5) {
+                ctx.fillStyle = '#99ccff';
+                ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
             } else if (tile === 6) {
                 ctx.fillStyle = '#cc3300';
                 ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
@@ -643,7 +646,7 @@ document.querySelectorAll('.tool-button').forEach(btn => {
 });
 
 document.addEventListener('keydown', (e) => {
-    if (['0', '1', '2', '3', '4', '6'].includes(e.key)) {
+    if (['0', '1', '2', '3', '4', '5', '6'].includes(e.key)) {
         currentTool = e.key;
         editingOrbIndex = null;
         document.querySelectorAll('.tool-button').forEach(b => b.classList.remove('active'));

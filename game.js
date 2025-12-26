@@ -2,6 +2,8 @@ let levels = [];
 let currentLevelId = null;
 let currentLevel = null;
 let playerPos = { x: 0, y: 0 };
+let lastPlayerPos = { x: null, y: null };
+let suppressOrbSteps = false; // when true, don't run orb.step() during intermediate moves (we'll run once at the end)
 let completedLevels = [];
 let canvas, ctx;
 let pushableBlocks = [];
@@ -53,6 +55,7 @@ const TILE_TYPES = {
     WATER: 2,
     BLOCK: 3,
     GOAL: 4,
+    ICE: 5,
     LAVA: 6
 };
 
@@ -66,7 +69,8 @@ const COLORS = {
     PLAYER: '#00CCFF',
     ORB: '#FF2222',
     GRID: '#222222',
-    LAVA: '#cc3300'
+    LAVA: '#cc3300',
+    ICE: '#99ccff'
 };
 
 class PushableBlock {
@@ -131,9 +135,7 @@ class PushableBlock {
                 return;
             }
 
-            // Update game state checks after arrival
-            moveOrbs();
-            checkCollisions();
+            // Update game state checks after arrival (orb stepping only happens on player moves)
             checkWin();
         }
     }
@@ -167,33 +169,95 @@ class Orb {
         }
         this.seq = Array.isArray(data.seq) ? data.seq.slice() : (data.seq ? [data.seq] : []);
         this.idx = Number.isFinite(data.idx) ? data.idx : 0; // next command index
+
+        // Render animation state for smooth per-tile moves
+        this.startX = this.x * TILE_SIZE;
+        this.startY = this.y * TILE_SIZE;
+        this.destX = this.x * TILE_SIZE;
+        this.destY = this.y * TILE_SIZE;
+        this.moving = false;
+        this.animProgress = 0;
+        this.animDuration = 0.14;
+
+        this.prevX = this.x;
+        this.prevY = this.y;
     }
 
     // Execute a single command from the sequence (one player move triggers one orb step)
-    step(pushableBlocksRef, currentLevelRef, otherOrbs) {
+    async step(pushableBlocksRef, currentLevelRef, otherOrbs) {
         if (!this.seq || this.seq.length === 0) return;
         const cmd = this.seq[this.idx % this.seq.length];
         this.idx = (this.idx + 1) % this.seq.length;
         if (!cmd) return;
         const c = cmd.toLowerCase().trim();
-        if (c === 'wait') return;
+        if (c === 'wait') {
+            // record that we stayed in place
+            this.prevX = this.x; this.prevY = this.y;
+            return;
+        }
         const deltas = { w: {dx:0,dy:-1}, s: {dx:0,dy:1}, a: {dx:-1,dy:0}, d: {dx:1,dy:0} };
         if (!deltas[c]) return;
         const dx = deltas[c].dx, dy = deltas[c].dy;
-        const nx = this.x + dx, ny = this.y + dy;
-        if (!currentLevelRef) return;
-        // bounds / walls
-        if (nx < 0 || nx >= currentLevelRef.width || ny < 0 || ny >= currentLevelRef.height) return;
-        const tile = currentLevelRef.tiles[ny][nx];
-        if (tile === TILE_TYPES.WALL) return;
-        // don't move into blocks
-        const hasBlock = pushableBlocksRef.find(b => b.x === nx && b.y === ny);
-        if (hasBlock) return;
-        // don't move into other orbs
-        const collisionOrb = otherOrbs.find(o => o !== this && o.x === nx && o.y === ny);
-        if (collisionOrb) return;
-        // allowed: move
-        this.x = nx; this.y = ny;
+
+        // We'll attempt to take steps and continue sliding if we encounter ICE tiles
+        let nx = this.x + dx, ny = this.y + dy;
+        while (true) {
+            if (!currentLevelRef) return;
+            // bounds / walls
+            if (nx < 0 || nx >= currentLevelRef.width || ny < 0 || ny >= currentLevelRef.height) return;
+            const tile = currentLevelRef.tiles[ny][nx];
+            if (tile === TILE_TYPES.WALL) return;
+            // don't move into blocks
+            const hasBlock = pushableBlocksRef.find(b => b.x === nx && b.y === ny);
+            if (hasBlock) return;
+            // don't move into other orbs
+            const collisionOrb = otherOrbs.find(o => o !== this && o.x === nx && o.y === ny);
+            if (collisionOrb) return;
+
+            // perform one discrete move and animate it
+            this.prevX = this.x; this.prevY = this.y;
+            this.x = nx; this.y = ny;
+            this.startX = this.startX || this.prevX * TILE_SIZE;
+            this.startY = this.startY || this.prevY * TILE_SIZE;
+            this.destX = this.x * TILE_SIZE;
+            this.destY = this.y * TILE_SIZE;
+            this.animProgress = 0;
+            this.moving = true;
+
+            // wait for orb animation to complete
+            // await waitForOrbToFinish(this);
+
+            // If we stepped onto ICE, continue one more tile in the same direction if possible
+            const landedTile = currentLevelRef.tiles[this.y][this.x];
+            if (landedTile === TILE_TYPES.ICE) {
+                nx = this.x + dx; ny = this.y + dy;
+                // loop again and attempt next slide step
+                continue;
+            }
+            break;
+        }
+    }
+
+    // render updater for animation
+    update(dt) {
+        if (!this.moving) return;
+        this.animProgress += dt;
+        const t = Math.min(this.animProgress / this.animDuration, 1);
+        const sx = this.startX;
+        const sy = this.startY;
+        const dx = this.destX - sx;
+        const dy = this.destY - sy;
+        // store pixel render pos for drawing
+        this.renderX = sx + dx * t;
+        this.renderY = sy + dy * t;
+        if (t >= 1) {
+            this.moving = false;
+            this.renderX = this.destX;
+            this.renderY = this.destY;
+            // reset start to dest for next move
+            this.startX = this.destX;
+            this.startY = this.destY;
+        }
     }
 
     // serialize state for save/undo
@@ -204,6 +268,11 @@ class Orb {
     // Simple collision check against player coords
     checkCollision(px, py) {
         return this.x === px && this.y === py;
+    }
+
+    getRenderPos() {
+        if (this.moving && typeof this.renderX === 'number') return { x: this.renderX, y: this.renderY };
+        return { x: this.x * TILE_SIZE, y: this.y * TILE_SIZE };
     }
 }
 
@@ -415,7 +484,7 @@ function computeMoveHighlights() {
         if (tx < 0 || tx >= currentLevel.width || ty < 0 || ty >= currentLevel.height) return false;
         const tile = simTiles[ty][tx];
         const hasBlock = simBlocks.some(b => b.x === tx && b.y === ty);
-        return (tile === TILE_TYPES.EMPTY || tile === TILE_TYPES.WATER || tile === TILE_TYPES.GOAL || tile === TILE_TYPES.LAVA) && !hasBlock;
+        return (tile === TILE_TYPES.EMPTY || tile === TILE_TYPES.WATER || tile === TILE_TYPES.GOAL || tile === TILE_TYPES.LAVA || tile === TILE_TYPES.ICE) && !hasBlock;
     };
 
     dirs.forEach(d => {
@@ -435,7 +504,51 @@ function computeMoveHighlights() {
             // Is there a simulated block at nx,ny ?
             const blockIdx = simBlocks.findIndex(b => b.x === nx && b.y === ny);
             if (blockIdx === -1) {
-                // empty/goal/water/lava tile — we can step here
+                // empty/goal/water/lava/ice tile — we can step here
+                // If it's ICE, simulate sliding to the final landing tile and highlight that
+                if (tile === TILE_TYPES.ICE) {
+                    let sx = nx, sy = ny;
+                    let landed = false;
+                    while (true) {
+                        const tx = sx + d.dx, ty = sy + d.dy;
+                        if (tx < 0 || tx >= currentLevel.width || ty < 0 || ty >= currentLevel.height) {
+                            // out of bounds: we land on current ice tile
+                            moveHighlights.push({ x: sx, y: sy });
+                            landed = true;
+                            break;
+                        }
+                        const tTile = simTiles[ty][tx];
+                        if (tTile === TILE_TYPES.WALL) {
+                            moveHighlights.push({ x: sx, y: sy });
+                            landed = true;
+                            break;
+                        }
+                        const blockAheadIdx = simBlocks.findIndex(b => b.x === tx && b.y === ty);
+                        if (blockAheadIdx !== -1) {
+                            // There's a block ahead during sliding — treat as push candidate for the first ice tile
+                            moveHighlights.push({ x: sx, y: sy });
+                            landed = true;
+                            break;
+                        }
+                        if (tTile !== TILE_TYPES.ICE) {
+                            // We will slide into this non-ice tile and stop
+                            moveHighlights.push({ x: tx, y: ty });
+                            landed = true;
+                            break;
+                        }
+                        // continue sliding
+                        sx = tx; sy = ty;
+                    }
+                    if (landed) {
+                        // we considered sliding result; advance simulated player to the final tile we highlighted
+                        const last = moveHighlights[moveHighlights.length - 1];
+                        px = last.x; py = last.y;
+                        // do not continue step loop (sliding handles multi-tile behavior)
+                        break;
+                    }
+                }
+
+                // otherwise normal tile
                 moveHighlights.push({ x: nx, y: ny });
                 // advance the simulated player position and continue
                 px = nx; py = ny;
@@ -692,7 +805,10 @@ function handleKeyPress(e) {
         moveHistory.push(currentState);
 
         const doSteps = async () => {
-            for (let step = 0; step < maxSteps; step++) {
+            // Defer orb steps until the entire move (including ice sliding) completes
+            suppressOrbSteps = true;
+
+            for (let step = 0; step < maxSteps || true; step++) {
                 const nx = playerPos.x + dx;
                 const ny = playerPos.y + dy;
 
@@ -700,6 +816,9 @@ function handleKeyPress(e) {
                 if (!canMoveTo(nx, ny) && !pushableBlocks.some(b => b.x === nx && b.y === ny)) {
                     break;
                 }
+
+                // Snapshot previous player's tile for swap detection
+                lastPlayerPos = { x: playerPos.x, y: playerPos.y };
 
                 // Collect any blocks in the line
                 const blocksToPush = [];
@@ -746,13 +865,12 @@ function handleKeyPress(e) {
                         });
                     }
 
-                    // Move player into the tile
+                    // Move player into the tile and animate
                     playerPos.x = nx; playerPos.y = ny;
                     movePlayerToTile(playerPos.x, playerPos.y);
-                    // Player moved one step — make orbs step as well
-                    stepOrbs();
+                    await waitForPlayerToArrive();
 
-                    // Recompute chain for animation
+                    // Recompute chain for animation, and if blocks are on ICE, keep sliding them until they stop
                     let currentChain = [];
                     let qx = playerPos.x, qy = playerPos.y;
                     while (true) {
@@ -766,39 +884,97 @@ function handleKeyPress(e) {
                         blocksSliding = true;
                         slideBlocksChainDiscrete(currentChain, dx, dy);
                         try {
-                            if (typeof window !== 'undefined' && typeof window.waitForBlocksToFinish === 'function') {
-                                await window.waitForBlocksToFinish(currentChain);
-                            } else {
-                                // Fallback: no wait available
-                                await Promise.resolve();
+                            await waitForBlocksToFinish(currentChain);
+
+                            // Continue sliding blocks if they are on ICE
+                            while (true) {
+                                // recompute chain
+                                const chain = [];
+                                let tx = playerPos.x, ty = playerPos.y;
+                                while (true) {
+                                    const bb = pushableBlocks.find(b => b.x === tx && b.y === ty);
+                                    if (!bb) break;
+                                    chain.push(bb);
+                                    tx += dx; ty += dy;
+                                }
+                                if (chain.length === 0) break;
+                                const lead = chain[chain.length - 1];
+                                const leadTile = currentLevel.tiles[lead.y][lead.x];
+                                const nextX = lead.x + dx, nextY = lead.y + dy;
+                                if (!canPushBlockTo(nextX, nextY)) break;
+                                if (leadTile !== TILE_TYPES.ICE) break;
+
+                                slideBlocksChainDiscrete(chain, dx, dy);
+                                await waitForBlocksToFinish(chain);
                             }
+
                         } catch (err) {
                             console.warn('waitForBlocksToFinish failed or missing:', err);
                         }
                         blocksSliding = false;
-                        movePlayerToTile(playerPos.x, playerPos.y);
                     }
 
-                    // after handling push, continue to next step unless something stopped us
-                    continue; // next step
+                    // direct collision check with stationary orbs
+                    checkCollisions();
+                    if (!gameRunning) return; // died during intermediate
+
+                    // If landed on ICE, continue sliding automatically
+                    const landedTile = currentLevel.tiles[playerPos.y][playerPos.x];
+
+                    // ślizg tylko jeśli faktycznie stoimy na lodzie
+                    if (landedTile === TILE_TYPES.ICE) {
+                        continue;
+                    }
+
+                    // po pchnięciu bloku ZAWSZE kończ ruch
+                    break;
+
                 }
 
                 // No blocks in the way: simple move
+                lastPlayerPos = { x: playerPos.x, y: playerPos.y };
                 playerPos.x = nx; playerPos.y = ny;
                 movePlayerToTile(playerPos.x, playerPos.y);
-                // Player moved one step — make orbs step as well
-                stepOrbs();
+                await waitForPlayerToArrive();
 
-                // If we stepped into water/lava/goal, stop further steps
+                // direct collision check with stationary orbs
+                checkCollisions();
+                if (!gameRunning) return; // died during intermediate
+
+                // Handle ice sliding: if we're on ICE, continue the loop until we leave ice
                 const tile = currentLevel.tiles[playerPos.y][playerPos.x];
+                if (tile === TILE_TYPES.ICE) {
+                    continue; // keep sliding until non-ice
+                }
+
                 if (tile === TILE_TYPES.WATER || tile === TILE_TYPES.LAVA || tile === TILE_TYPES.GOAL) break;
 
-                // otherwise continue next step
+                // If we have exhausted allowed steps, stop
+                if (maxSteps && step >= (maxSteps - 1)) break;
+
                 continue;
             }
 
-            // Ensure selection is cleared after the multi-step action finishes
+            // End of multi-step action: clear selection and run deferred orb steps once
             clearPlayerSelection();
+            suppressOrbSteps = false;
+            await stepOrbs();
+
+            // After orbs moved, check swap/pass-through collisions for the final step
+            if (lastPlayerPos && Number.isFinite(lastPlayerPos.x) && Number.isFinite(lastPlayerPos.y)) {
+                for (const orb of orbs) {
+                    if (!orb) continue;
+                    if (orb.x === lastPlayerPos.x && orb.y === lastPlayerPos.y && orb.prevX === playerPos.x && orb.prevY === playerPos.y) {
+                        // swap happened — die
+                        dieLevel();
+                        return;
+                    }
+                }
+            }
+
+            // Final collision/win checks
+            checkCollisions();
+            checkWin();
         };
 
         // Prevent overlapping moves
@@ -808,10 +984,7 @@ function handleKeyPress(e) {
         // Run steps (fire-and-forget; errors should not block the UI)
         doSteps().catch(err => { console.error('multi-step move error', err); blocksSliding = false; clearPlayerSelection(); }).finally(() => { moveInProgress = false; });
 
-        // Quick update checks
-        moveOrbs();
-        checkCollisions();
-        checkWin();
+
         return;
     }
 }
@@ -846,7 +1019,7 @@ function canMoveTo(x, y) {
     // We handle the "if block" logic in handleKeyPress, so here we just return true if it's a valid tile to *attempt* to move to
     
     // Player can move to empty, goal, water (dies), or lava (dies)
-    return (tile === TILE_TYPES.EMPTY || tile === TILE_TYPES.GOAL || tile === TILE_TYPES.WATER || tile === TILE_TYPES.LAVA);
+    return (tile === TILE_TYPES.EMPTY || tile === TILE_TYPES.WATER || tile === TILE_TYPES.GOAL || tile === TILE_TYPES.LAVA || tile === TILE_TYPES.ICE);
 }
 
 function canPushBlockTo(x, y) {
@@ -867,7 +1040,7 @@ function canPushBlockTo(x, y) {
     // 4. Lava (block falls into lava and disappears)
     // CANNOT push into: Wall, Another Block
     // Blocks can be pushed to empty, water (falls), goal, or lava (falls)
-    return (tile === TILE_TYPES.EMPTY || tile === TILE_TYPES.WATER || tile === TILE_TYPES.GOAL || tile === TILE_TYPES.LAVA);
+    return (tile === TILE_TYPES.EMPTY || tile === TILE_TYPES.WATER || tile === TILE_TYPES.GOAL || tile === TILE_TYPES.LAVA || tile === TILE_TYPES.ICE);
 }
 
 // Attempt a single slide step (player): decide whether to move, push blocks, or stop.
@@ -941,10 +1114,7 @@ function slideBlocksChainDiscrete(chain, dx, dy) {
         b.stepOnce(dx, dy);
     }
 
-    // Do a quick state update (orbs/collisions/win may be handled upon arrival in block.update)
-    moveOrbs();
-    checkCollisions();
-    checkWin();
+    // State updates (orbs step only when the player steps). Any collision checks will happen after the player move completes.
 }
 
 // No async waiting required for discrete block movement.
@@ -976,12 +1146,66 @@ function waitForBlocksToFinish(chain) {
 // Ensure the helper is available globally so event handlers and older code paths can call it
 if (typeof window !== 'undefined') window.waitForBlocksToFinish = waitForBlocksToFinish;
 
+function waitForPlayerToArrive() {
+    return new Promise(resolve => {
+        if (!playerRender.moving) return resolve();
+        const id = setInterval(() => {
+            if (!playerRender.moving) {
+                clearInterval(id);
+                resolve();
+            }
+        }, 16);
+        setTimeout(() => {
+            clearInterval(id);
+            resolve();
+        }, 5000);
+    });
+}
+
+// Helper: wait until a specific orb finishes its current per-tile animation
+function waitForOrbToFinish(orb) {
+    return new Promise(resolve => {
+        if (!orb || !orb.moving) return resolve();
+        const id = setInterval(() => {
+            if (!orb.moving) {
+                clearInterval(id);
+                resolve();
+            }
+        }, 16);
+        setTimeout(() => {
+            clearInterval(id);
+            resolve();
+        }, 5000);
+    });
+}
+
+// Ensure wait helper is globally available for older code
+if (typeof window !== 'undefined') window.waitForPlayerToArrive = waitForPlayerToArrive;
+
 function updateEntities(dt) {
-    // Update blocks (handle step timers and short animations)
+    
+    if (playerRender.moving) {
+        playerRender.animProgress += dt;
+        const t = Math.min(
+            playerRender.animProgress / playerRender.animDuration,
+            1
+        );
+
+        playerRender.xPos =
+            playerRender.startX + (playerRender.destX - playerRender.startX) * t;
+        playerRender.yPos =
+            playerRender.startY + (playerRender.destY - playerRender.startY) * t;
+
+        if (t >= 1) {
+            playerRender.moving = false;
+            playerRender.xPos = playerRender.destX;
+            playerRender.yPos = playerRender.destY;
+            onPlayerArrive();
+        }
+    }
     pushableBlocks.forEach(b => b.update(dt));
 
-    // Orbs and other entity updates
-    moveOrbs();
+    // Orbs are stepped only when the player moves; do not move them every frame.
 
     // Defensive cleanup: if nothing is moving, ensure locks/flags are cleared
     const anyBlockMoving = pushableBlocks.some(b => b.moving);
@@ -1007,32 +1231,28 @@ function moveOrbs() {
     // Keep this function for compatibility (no-op).
 }
 
-function stepOrbs() {
+async function stepOrbs() {
     if (!orbs || orbs.length === 0) return;
-    // Each orb executes its next sequence command
-    orbs.forEach(o => o.step(pushableBlocks, currentLevel, orbs));
+    // Each orb executes its next sequence command (allow them to animate/sliding internally)
+    await Promise.all(orbs.map(o => o.step(pushableBlocks, currentLevel, orbs)));
     // After orbs moved, check collisions (orb vs player)
     checkCollisions();
 }
 
 function movePlayerToTile(tx, ty) {
-    // Immediate discrete movement (snap to tile, no smooth animation)
-    playerPos.x = tx;
-    playerPos.y = ty;
-    playerRender.destX = tx;
-    playerRender.destY = ty;
-    playerRender.xPos = tx * TILE_SIZE;
-    playerRender.yPos = ty * TILE_SIZE;
-    playerRender.moving = false;
-    // Call arrival handler immediately to continue sliding if needed
-    onPlayerArrive();
+    // Snapshot: playerPos should already be updated by caller to the target tile
+    // Start a smooth animation for the player from current render pos to destination
+    playerRender.startX = playerRender.xPos;
+    playerRender.startY = playerRender.yPos;
+    playerRender.destX = tx * TILE_SIZE;
+    playerRender.destY = ty * TILE_SIZE;
+    playerRender.animProgress = 0;
+    playerRender.animDuration = 0.14; // smooth per-tile duration
+    playerRender.moving = true;
 
-    // Defensive: ensure move guard is cleared if we arrive while a previous action left it set
-    if (moveInProgress && !pushableBlocks.some(b => b.moving) && !(playerRender && playerRender.moving)) {
-        console.debug('movePlayerToTile: clearing stale moveInProgress flag');
-        moveInProgress = false;
-    }
+    // Defensive: ensure move guard is cleared later once movement completes in updateEntities
 }
+
 
 function onPlayerArrive() {
     if (!currentLevel) return;
@@ -1052,14 +1272,29 @@ function onPlayerArrive() {
         return;
     }
 
-    // Check collisions with orbs after arrival
-    checkCollisions();
+    // After a player step, orbs should step simultaneously — but if we're in a multi-tile slide action, defer orb steps until the end
+    if (suppressOrbSteps) {
+        // During sliding, only check direct collisions with stationary orbs at each step
+        checkCollisions();
+        return;
+    }
 
-
-
-    // Not sliding: perform post-move checks
-    moveOrbs();
-    checkWin();
+    // Not suppressed: perform orb steps and then check for swaps / collisions
+    (async () => {
+        await stepOrbs();
+        // Next, detect swap/pass-through collisions: if an orb moved into the player's previous tile while the player moved into the orb's previous tile -> death
+        if (lastPlayerPos && Number.isFinite(lastPlayerPos.x) && Number.isFinite(lastPlayerPos.y)) {
+            for (const orb of orbs) {
+                if (!orb) continue;
+                if (orb.x === lastPlayerPos.x && orb.y === lastPlayerPos.y && orb.prevX === playerPos.x && orb.prevY === playerPos.y) {
+                    // swap happened — die
+                    dieLevel();
+                    return;
+                }
+            }
+        }
+        checkWin();
+    })();
 }
 
 function checkCollisions() {
@@ -1081,17 +1316,20 @@ function dieLevel() {
     gameRunning = false;
     
     const message = document.getElementById('winMessage');
-    message.innerHTML = '<div>You died!<br><br>Try again!</div>';
+    message.innerHTML = '<div>You died!<br><br>Click to restart</div>';
     message.classList.add('show');
     
     if (keyHandlerAttached) {
         document.removeEventListener('keydown', handleKeyPress);
         keyHandlerAttached = false;
     }
-    
-    setTimeout(() => {
+
+    // Clicking the message hides it and restarts the level
+    message.onclick = () => {
+        message.classList.remove('show');
+        message.onclick = null;
         startLevel(currentLevelId);
-    }, 2000);
+    };
 }
 
 function winLevel() {
@@ -1105,13 +1343,7 @@ function winLevel() {
     const nextLevel = currentLevelId + 1;
     
     const message = document.getElementById('winMessage');
-    message.innerHTML = `<div>You win!<br>${currentLevel.name}<br><br>`;
-    
-    if (nextLevel < levels.length) {
-        message.innerHTML += `Next level unlocked! 🚀</div>`;
-    } else {
-        message.innerHTML += `You completed the game! 🏆</div>`;
-    }
+    message.innerHTML = `<div>You win!<br>${currentLevel.name}<br><br>Click to restart</div>`;
     
     message.classList.add('show');
     
@@ -1119,10 +1351,13 @@ function winLevel() {
         document.removeEventListener('keydown', handleKeyPress);
         keyHandlerAttached = false;
     }
-    
-    setTimeout(() => {
-        backToMenu();
-    }, 3000);
+
+    // Clicking restarts the level (as requested "instead of exit -> restart")
+    message.onclick = () => {
+        message.classList.remove('show');
+        message.onclick = null;
+        startLevel(currentLevelId);
+    };
 }
 
 function backToMenu() {
@@ -1133,7 +1368,9 @@ function backToMenu() {
     }
     document.getElementById('gameView').classList.remove('active');
     document.getElementById('levelSelectWrapper').style.display = 'block';
-    document.getElementById('winMessage').classList.remove('show');
+    const msg = document.getElementById('winMessage');
+    msg.classList.remove('show');
+    msg.onclick = null;
     
     setupLevelSelect();
 }
@@ -1181,6 +1418,9 @@ function draw() {
             } else if (tile === TILE_TYPES.LAVA) {
                 ctx.fillStyle = COLORS.LAVA;
                 ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+            } else if (tile === TILE_TYPES.ICE) {
+                ctx.fillStyle = COLORS.ICE;
+                ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
             }
             
             ctx.strokeStyle = COLORS.GRID;
@@ -1199,8 +1439,9 @@ function draw() {
     });
 
     orbs.forEach(orb => {
-        const px = orb.x * TILE_SIZE;
-        const py = orb.y * TILE_SIZE;
+        const pos = orb.getRenderPos ? orb.getRenderPos() : { x: orb.x * TILE_SIZE, y: orb.y * TILE_SIZE };
+        const px = pos.x;
+        const py = pos.y;
         const radius = TILE_SIZE * 0.35;
         ctx.fillStyle = COLORS.ORB;
         ctx.beginPath();
