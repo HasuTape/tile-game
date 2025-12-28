@@ -140,6 +140,7 @@ function setTile(x, y) {
             updateOrbsList();
         }
     } else {
+        // Allow placing blocks on any tile (they will be converted to empty tiles and blocks array)
         level.tiles[y][x] = parseInt(currentTool);
     }
     

@@ -13,6 +13,11 @@ let gameRunning = false;
 let blocksSliding = false; // whether blocks are currently moving/animating (prevents player input)
 let playerRender = { xPos: 0, yPos: 0, startX: 0, startY: 0, destX: 0, destY: 0, moving: false, animProgress: 0, animDuration: 0.12, speed: 0 }; // pixels/s
 
+// Game stats tracking
+let moveCount = 0;
+let startTime = 0;
+let levelRecords = {}; // Store best times for each level
+
 // Mobile tap-to-move selection state
 let playerSelected = false;
 let moveHighlights = []; // array of {x,y} tiles that are valid moves when player is selected
@@ -454,6 +459,8 @@ function startLevel(levelId) {
     playerPos = { x: startX, y: startY };
     
     moveHistory = []; // Reset history
+    moveCount = 0; // Reset move counter
+    startTime = Date.now(); // Start timing
     playerRender.xPos = playerPos.x * TILE_SIZE;
     playerRender.yPos = playerPos.y * TILE_SIZE;
     playerRender.destX = playerPos.x * TILE_SIZE;
@@ -523,6 +530,14 @@ function startLevel(levelId) {
                 }
             }
         }
+    }
+    
+    // Validate player start position - prevent starting on invalid tiles
+    const startTile = currentLevel.tiles[playerPos.y][playerPos.x];
+    if (startTile === TILE_TYPES.WALL || startTile === TILE_TYPES.WATER || startTile === TILE_TYPES.LAVA) {
+        alert(`Cannot start level: Player is on ${startTile === TILE_TYPES.WALL ? 'wall' : startTile === TILE_TYPES.WATER ? 'water' : 'lava'}. Please fix the level in editor.`);
+        backToMenu();
+        return;
     }
 
     orbs = (currentLevel.orbs || []).map(orbData => new Orb(orbData));
@@ -895,12 +910,14 @@ function handleKeyPress(e) {
         const maxSteps = Number.isFinite(currentLevel.moveDistance) && currentLevel.moveDistance > 0 ? Math.floor(currentLevel.moveDistance) : 1;
         // Record a single history state for the entire action
         moveHistory.push(currentState);
+        moveCount++; // Increment move counter once per player action
 
         const doSteps = async () => {
             // Defer orb steps until the entire move (including ice sliding) completes
             suppressOrbSteps = true;
 
-            for (let step = 0; step < maxSteps; step++) {
+            let step = 0;
+            while (step < maxSteps) {
                 const nx = playerPos.x + dx;
                 const ny = playerPos.y + dy;
 
@@ -1010,12 +1027,10 @@ function handleKeyPress(e) {
                     checkCollisions();
                     if (!gameRunning) return; // died during intermediate
 
-                    // If landed on ICE, continue sliding automatically
+                    // If landed on ICE, continue sliding automatically (don't count as step)
                     const landedTile = currentLevel.tiles[playerPos.y][playerPos.x];
-
-                    // ślizg tylko jeśli faktycznie stoimy na lodzie
                     if (landedTile === TILE_TYPES.ICE) {
-                        continue;
+                        continue; // Don't increment step counter for ice sliding
                     }
 
                     // po pchnięciu bloku ZAWSZE kończ ruch
@@ -1036,14 +1051,14 @@ function handleKeyPress(e) {
                 const tile = currentLevel.tiles[playerPos.y][playerPos.x];
                 
                 if (tile === TILE_TYPES.ICE) {
-                    continue;
+                    continue; // Don't increment step counter for ice sliding
                 }
 
                 if (tile === TILE_TYPES.DIRECTION_UP) {
                     playerPos.y -= 1;
                     movePlayerToTile(playerPos.x, playerPos.y);
                     await waitForPlayerToArrive();
-                    continue;
+                    continue; // Don't increment step counter for direction tiles
                 }
                 if (tile === TILE_TYPES.DIRECTION_DOWN) {
                     playerPos.y += 1;
@@ -1066,10 +1081,8 @@ function handleKeyPress(e) {
 
                 if (tile === TILE_TYPES.WATER || tile === TILE_TYPES.LAVA || tile === TILE_TYPES.GOAL) break;
 
-                // If we have exhausted allowed steps, stop
-                if (maxSteps && step >= (maxSteps - 1)) break;
-
-                continue;
+                // Normal step completed, increment counter
+                step++;
             }
 
             // End of multi-step action: clear selection and run deferred orb steps once
@@ -1375,10 +1388,11 @@ function dieLevel() {
     gameRunning = false;
     
     const message = document.getElementById('winMessage');
+    message.style.background = 'rgba(200, 50, 50, 0.95)';
     message.innerHTML = `
         <div>You died!<br><br>
-            <button onclick="backToMenu()">Back to Menu</button>
-            <button onclick="startLevel(currentLevelId)">Reset Level</button>
+            <button onclick="hideMessage(); backToMenu();">Back to Menu</button>
+            <button onclick="hideMessage(); startLevel(currentLevelId);">Reset Level</button>
         </div>
     `;
     message.classList.add('show');
@@ -1391,6 +1405,26 @@ function dieLevel() {
 
 function winLevel() {
     gameRunning = false;
+    
+    const endTime = Date.now();
+    const timeElapsed = Math.round((endTime - startTime) / 1000);
+    
+    // Load records
+    const savedRecords = localStorage.getItem('levelRecords');
+    if (savedRecords) {
+        levelRecords = JSON.parse(savedRecords);
+    }
+    
+    // Check if new record
+    const levelKey = `level_${currentLevelId}`;
+    const isNewRecord = !levelRecords[levelKey] || timeElapsed < levelRecords[levelKey];
+    if (isNewRecord) {
+        levelRecords[levelKey] = timeElapsed;
+        localStorage.setItem('levelRecords', JSON.stringify(levelRecords));
+    }
+    
+    const recordText = levelRecords[levelKey] ? `Record: ${levelRecords[levelKey]}s` : 'No record';
+    const newRecordText = isNewRecord ? ' (NEW RECORD!)' : '';
 
     if (!completedLevels.includes(currentLevelId)) {
         completedLevels.push(currentLevelId);
@@ -1401,11 +1435,15 @@ function winLevel() {
     const hasNextLevel = nextLevel < levels.length;
     
     const message = document.getElementById('winMessage');
+    message.style.background = 'rgba(0, 150, 0, 0.95)';
     message.innerHTML = `
         <div>You win!<br>${currentLevel.name}<br><br>
-            <button onclick="backToMenu()">Back to Menu</button>
-            <button onclick="startLevel(currentLevelId)">Reset Level</button>
-            ${hasNextLevel ? `<button onclick="startLevel(${nextLevel})">Next Level</button>` : ''}
+            Moves: ${moveCount}<br>
+            Time: ${timeElapsed}s${newRecordText}<br>
+            ${recordText}<br><br>
+            <button onclick="hideMessage(); backToMenu();">Back to Menu</button>
+            <button onclick="hideMessage(); startLevel(currentLevelId);">Reset Level</button>
+            ${hasNextLevel ? `<button onclick="hideMessage(); startLevel(${nextLevel});">Next Level</button>` : ''}
         </div>
     `;
     
@@ -1415,6 +1453,12 @@ function winLevel() {
         document.removeEventListener('keydown', handleKeyPress);
         keyHandlerAttached = false;
     }
+}
+
+function hideMessage() {
+    const msg = document.getElementById('winMessage');
+    msg.classList.remove('show');
+    msg.innerHTML = '';
 }
 
 function backToMenu() {
@@ -1566,6 +1610,11 @@ function loadProgress() {
     const saved = localStorage.getItem('completedLevels');
     if (saved) {
         completedLevels = JSON.parse(saved);
+    }
+    
+    const savedRecords = localStorage.getItem('levelRecords');
+    if (savedRecords) {
+        levelRecords = JSON.parse(savedRecords);
     }
 }
 

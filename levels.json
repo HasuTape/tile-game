@@ -2238,14 +2238,15 @@
             "wait",
             "d"
           ],
-          "type": "strong"
+          "type": "strong",
+          "canAttack": true
         }
       ]
     },
     {
       "id": 12,
-      "name": "Level 13",
-      "instructions": "",
+      "name": "_Majej_",
+      "instructions": "It's made by _Majej_",
       "community": true,
       "width": 10,
       "height": 10,
