@@ -213,6 +213,14 @@ function draw() {
                 ctx.arc(opx + radius * 0.6, opy - radius * 0.6, 3, 0, Math.PI * 2);
                 ctx.fill();
             }
+            
+            // Show green dot for follow orbs
+            if (orb.canFollow) {
+                ctx.fillStyle = '#00FF00';
+                ctx.beginPath();
+                ctx.arc(opx - radius * 0.6, opy - radius * 0.6, 3, 0, Math.PI * 2);
+                ctx.fill();
+            }
         }
 
         if (orb && orb.waypoints) {
@@ -411,7 +419,12 @@ function updateOrbsList() {
                 <label><input type="checkbox" id="orbCanAttack" ${orb.canAttack ? 'checked' : ''} onchange="updateOrbAttack(${editingOrbIndex})"> Can Attack (shows red dot)</label>
             </div>
             ` : ''}
+            
+            <div style="margin-bottom:8px;">
+                <label><input type="checkbox" id="orbCanFollow" ${orb.canFollow ? 'checked' : ''} onchange="updateOrbFollow(${editingOrbIndex})"> Can Follow (shows green dot)</label>
+            </div>
 
+            ${!orb.canFollow ? `
             <div style="margin-bottom:8px;">
                 <div style="font-size:12px; margin-bottom:6px;">Sequence (commands):</div>
                 <div id="orbSeqContainer" style="display:flex; gap:8px; flex-wrap:wrap;">
@@ -427,10 +440,17 @@ function updateOrbsList() {
             </div>
 
             <div style="font-size:11px; color:#999;">Use the buttons to add commands. Dragging to reorder isn't implemented; use up/down arrows.</div>
+            ` : `
+            <div style="font-size:12px; color:#999; padding:10px; background:#333; border-radius:4px;">
+                Follow orbs automatically move towards the player. No sequence needed.
+            </div>
+            `}
         `;
 
         container.appendChild(editorDiv);
-        renderOrbSeq(orb, editingOrbIndex);
+        if (!orb.canFollow) {
+            renderOrbSeq(orb, editingOrbIndex);
+        }
     }
 }
 
@@ -557,6 +577,17 @@ function updateOrbAttack(orbIdx) {
     const canAttack = document.getElementById('orbCanAttack').checked;
     saveToHistory();
     orb.canAttack = canAttack;
+    updateOrbsList();
+    draw();
+}
+
+function updateOrbFollow(orbIdx) {
+    const level = levels[currentLevelIndex];
+    const orb = level.orbs[orbIdx];
+    if (!orb) return;
+    const canFollow = document.getElementById('orbCanFollow').checked;
+    saveToHistory();
+    orb.canFollow = canFollow;
     updateOrbsList();
     draw();
 }

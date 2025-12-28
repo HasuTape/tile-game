@@ -191,6 +191,7 @@ class Orb {
         this.type = data.type || "normal";
         this.flying = this.type === "flying";
         this.canAttack = data.canAttack || false; // Optional attack for strong orbs
+        this.canFollow = data.canFollow || false; // Optional follow for any orb
 
         // animation
         this.startX = this.x * TILE_SIZE;
@@ -208,6 +209,41 @@ class Orb {
 
     // Execute a single command from the sequence
     async step(pushableBlocksRef, currentLevelRef, otherOrbs, playerPos) {
+        if (this.canFollow) {
+            // Follow orb: calculate path to player
+            const dx = playerPos.x - this.x;
+            const dy = playerPos.y - this.y;
+            
+            let moveX = 0, moveY = 0;
+            if (Math.abs(dx) > Math.abs(dy)) {
+                moveX = dx > 0 ? 1 : -1;
+            } else if (dy !== 0) {
+                moveY = dy > 0 ? 1 : -1;
+            }
+            
+            const nx = this.x + moveX;
+            const ny = this.y + moveY;
+            
+            // Check if can move to target position
+            if (nx >= 0 && nx < currentLevelRef.width && ny >= 0 && ny < currentLevelRef.height) {
+                const tile = currentLevelRef.tiles[ny][nx];
+                if (tile !== TILE_TYPES.WALL) {
+                    this.prevX = this.x;
+                    this.prevY = this.y;
+                    this.x = nx;
+                    this.y = ny;
+                    
+                    this.startX = this.prevX * TILE_SIZE;
+                    this.startY = this.prevY * TILE_SIZE;
+                    this.destX = this.x * TILE_SIZE;
+                    this.destY = this.y * TILE_SIZE;
+                    this.animProgress = 0;
+                    this.moving = true;
+                }
+            }
+            return;
+        }
+        
         if (!this.seq || this.seq.length === 0) return;
 
         const cmd = this.seq[this.idx % this.seq.length];
@@ -1580,6 +1616,14 @@ function draw() {
             ctx.fillStyle = '#FF0000';
             ctx.beginPath();
             ctx.arc(px + TILE_SIZE / 2 + radius * 0.6, py + TILE_SIZE / 2 - radius * 0.6, 4, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        
+        // Show green dot for follow orbs
+        if (orb.canFollow) {
+            ctx.fillStyle = '#00FF00';
+            ctx.beginPath();
+            ctx.arc(px + TILE_SIZE / 2 - radius * 0.6, py + TILE_SIZE / 2 - radius * 0.6, 4, 0, Math.PI * 2);
             ctx.fill();
         }
     });
