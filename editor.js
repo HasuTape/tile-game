@@ -6,6 +6,11 @@ let isDragging = false;
 
 const TILE_SIZE = 40;
 const HISTORY_LIMIT = 50;
+const ORB_COLORS = {
+    normal: '#FF4444',
+    flying: '#9933ff',
+    strong: '#8b4513'
+};
 let history = [];
 let editingOrbIndex = null;
 
@@ -179,10 +184,19 @@ function draw() {
             const opy = orb.y * TILE_SIZE + TILE_SIZE / 2;
             const radius = 8;
             const isSelected = editingOrbIndex === orbIdx;
-            ctx.fillStyle = isSelected ? '#FF2222' : '#FF4444';
+            
+            const type = orb.type || 'normal';
+            ctx.fillStyle = ORB_COLORS[type] || ORB_COLORS.normal;
+            
             ctx.beginPath();
             ctx.arc(opx, opy, radius, 0, Math.PI * 2);
             ctx.fill();
+
+            if (isSelected) {
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            }
         }
 
         if (orb && orb.waypoints) {

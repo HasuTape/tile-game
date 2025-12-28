@@ -56,7 +56,11 @@ const TILE_TYPES = {
     BLOCK: 3,
     GOAL: 4,
     ICE: 5,
-    LAVA: 6
+    LAVA: 6,
+    DIRECTION_UP: 7,
+    DIRECTION_DOWN: 8,
+    DIRECTION_LEFT: 9,
+    DIRECTION_RIGHT: 10
 };
 
 const COLORS = {
@@ -68,9 +72,15 @@ const COLORS = {
     GOAL: '#00FF00',
     PLAYER: '#00CCFF',
     ORB: '#FF2222',
+    ORB_FLYING: '#9933ff',
+    ORB_STRONG: '#8b4513',
     GRID: '#222222',
     LAVA: '#cc3300',
-    ICE: '#99ccff'
+    ICE: '#99ccff',
+    DIRECTION_UP: '#4400cc',
+    DIRECTION_DOWN: '#cc0044',
+    DIRECTION_LEFT: '#00cc44',
+    DIRECTION_RIGHT: '#ccaa00'
 };
 
 class PushableBlock {
@@ -155,22 +165,28 @@ class PushableBlock {
 } 
 
 let moveHistory = [];
-
 class Orb {
     constructor(data = {}) {
-        // data: { x, y, seq: ['w','s','wait'], idx }
+        // position
         if (Array.isArray(data.waypoints) && data.waypoints.length > 0) {
-            // Backward compat: take first waypoint as starting pos
             this.x = data.waypoints[0][0];
             this.y = data.waypoints[0][1];
         } else {
             this.x = Number.isFinite(data.x) ? data.x : 0;
             this.y = Number.isFinite(data.y) ? data.y : 0;
         }
-        this.seq = Array.isArray(data.seq) ? data.seq.slice() : (data.seq ? [data.seq] : []);
-        this.idx = Number.isFinite(data.idx) ? data.idx : 0; // next command index
 
-        // Render animation state for smooth per-tile moves
+        // movement sequence
+        this.seq = Array.isArray(data.seq)
+            ? data.seq.slice()
+            : (data.seq ? [data.seq] : []);
+        this.idx = Number.isFinite(data.idx) ? data.idx : 0;
+
+        // type
+        this.type = data.type || "normal";
+        this.flying = this.type === "flying";
+
+        // animation
         this.startX = this.x * TILE_SIZE;
         this.startY = this.y * TILE_SIZE;
         this.destX = this.x * TILE_SIZE;
@@ -179,102 +195,129 @@ class Orb {
         this.animProgress = 0;
         this.animDuration = 0.14;
 
+        // previous position
         this.prevX = this.x;
         this.prevY = this.y;
-    }
+    } // ⬅⬅⬅ TEGO BRAKOWAŁO
 
-    // Execute a single command from the sequence (one player move triggers one orb step)
-    async step(pushableBlocksRef, currentLevelRef, otherOrbs) {
+    // Execute a single command from the sequence
+    async step(pushableBlocksRef, currentLevelRef, otherOrbs, playerPos) {
         if (!this.seq || this.seq.length === 0) return;
+
         const cmd = this.seq[this.idx % this.seq.length];
         this.idx = (this.idx + 1) % this.seq.length;
         if (!cmd) return;
+
         const c = cmd.toLowerCase().trim();
         if (c === 'wait') {
-            // record that we stayed in place
-            this.prevX = this.x; this.prevY = this.y;
+            this.prevX = this.x;
+            this.prevY = this.y;
             return;
         }
-        const deltas = { w: {dx:0,dy:-1}, s: {dx:0,dy:1}, a: {dx:-1,dy:0}, d: {dx:1,dy:0} };
-        if (!deltas[c]) return;
-        const dx = deltas[c].dx, dy = deltas[c].dy;
 
-        // We'll attempt to take steps and continue sliding if we encounter ICE tiles
-        let nx = this.x + dx, ny = this.y + dy;
+        const deltas = {
+            w: { dx: 0, dy: -1 },
+            s: { dx: 0, dy: 1 },
+            a: { dx: -1, dy: 0 },
+            d: { dx: 1, dy: 0 }
+        };
+        if (!deltas[c]) return;
+
+        const { dx, dy } = deltas[c];
+        let nx = this.x + dx;
+        let ny = this.y + dy;
+
         while (true) {
             if (!currentLevelRef) return;
-            // bounds / walls
-            if (nx < 0 || nx >= currentLevelRef.width || ny < 0 || ny >= currentLevelRef.height) return;
-            const tile = currentLevelRef.tiles[ny][nx];
-            if (tile === TILE_TYPES.WALL) return;
-            // don't move into blocks
-            const hasBlock = pushableBlocksRef.find(b => b.x === nx && b.y === ny);
-            if (hasBlock) return;
-            // don't move into other orbs
+
+            if (
+                nx < 0 || nx >= currentLevelRef.width ||
+                ny < 0 || ny >= currentLevelRef.height
+            ) return;
+
+            if (!this.flying) {
+                const tile = currentLevelRef.tiles[ny][nx];
+                if (tile === TILE_TYPES.WALL) return;
+
+                const hasBlock = pushableBlocksRef.find(b => b.x === nx && b.y === ny);
+                if (hasBlock) {
+                    if (this.type === 'strong') {
+                        // Strong orb logic to push block
+                        const blocksToPush = [];
+                        let cx = nx, cy = ny;
+                        while (true) {
+                            const b = pushableBlocksRef.find(b => b.x === cx && b.y === cy);
+                            if (!b) break;
+                            blocksToPush.push(b);
+                            cx += dx; cy += dy;
+                        }
+
+                        const lastBlock = blocksToPush[blocksToPush.length - 1];
+                        const targetX = lastBlock.x + dx;
+                        const targetY = lastBlock.y + dy;
+
+                        let canPush = false;
+                        if (targetX >= 0 && targetX < currentLevelRef.width && targetY >= 0 && targetY < currentLevelRef.height) {
+                            const tTile = currentLevelRef.tiles[targetY][targetX];
+                            if (tTile === TILE_TYPES.EMPTY || tTile === TILE_TYPES.WATER || tTile === TILE_TYPES.GOAL || tTile === TILE_TYPES.LAVA || tTile === TILE_TYPES.ICE) {
+                                canPush = true;
+                            }
+                        }
+
+                        if (!canPush) return;
+
+                        const targetTile = currentLevelRef.tiles[targetY][targetX];
+
+                        if (targetTile === TILE_TYPES.WATER) {
+                            pushableBlocksRef.splice(pushableBlocksRef.indexOf(lastBlock), 1);
+                            currentLevelRef.tiles[targetY][targetX] = TILE_TYPES.EMPTY;
+                            for (let i = blocksToPush.length - 2; i >= 0; i--) {
+                                blocksToPush[i].stepOnce(dx, dy);
+                            }
+                        } else if (targetTile === TILE_TYPES.LAVA) {
+                            pushableBlocksRef.splice(pushableBlocksRef.indexOf(lastBlock), 1);
+                            for (let i = blocksToPush.length - 2; i >= 0; i--) {
+                                blocksToPush[i].stepOnce(dx, dy);
+                            }
+                        } else {
+                            for (let i = blocksToPush.length - 1; i >= 0; i--) {
+                                blocksToPush[i].stepOnce(dx, dy);
+                            }
+                        }
+                        // Orb moves after pushing
+                    } else {
+                        return;
+                    }
+                }
+            }
+
             const collisionOrb = otherOrbs.find(o => o !== this && o.x === nx && o.y === ny);
             if (collisionOrb) return;
 
-            // perform one discrete move and animate it
-            this.prevX = this.x; this.prevY = this.y;
-            this.x = nx; this.y = ny;
-            this.startX = this.startX || this.prevX * TILE_SIZE;
-            this.startY = this.startY || this.prevY * TILE_SIZE;
+            this.prevX = this.x;
+            this.prevY = this.y;
+            this.x = nx;
+            this.y = ny;
+
+            this.startX = this.prevX * TILE_SIZE;
+            this.startY = this.prevY * TILE_SIZE;
             this.destX = this.x * TILE_SIZE;
             this.destY = this.y * TILE_SIZE;
             this.animProgress = 0;
             this.moving = true;
 
-            // wait for orb animation to complete
-            // await waitForOrbToFinish(this);
-
-            // If we stepped onto ICE, continue one more tile in the same direction if possible
             const landedTile = currentLevelRef.tiles[this.y][this.x];
             if (landedTile === TILE_TYPES.ICE) {
-                nx = this.x + dx; ny = this.y + dy;
-                // loop again and attempt next slide step
+                nx = this.x + dx;
+                ny = this.y + dy;
                 continue;
             }
+
             break;
         }
     }
-
-    // render updater for animation
-    update(dt) {
-        if (!this.moving) return;
-        this.animProgress += dt;
-        const t = Math.min(this.animProgress / this.animDuration, 1);
-        const sx = this.startX;
-        const sy = this.startY;
-        const dx = this.destX - sx;
-        const dy = this.destY - sy;
-        // store pixel render pos for drawing
-        this.renderX = sx + dx * t;
-        this.renderY = sy + dy * t;
-        if (t >= 1) {
-            this.moving = false;
-            this.renderX = this.destX;
-            this.renderY = this.destY;
-            // reset start to dest for next move
-            this.startX = this.destX;
-            this.startY = this.destY;
-        }
-    }
-
-    // serialize state for save/undo
-    toJSON() {
-        return { x: this.x, y: this.y, seq: this.seq.slice(), idx: this.idx };
-    }
-
-    // Simple collision check against player coords
-    checkCollision(px, py) {
-        return this.x === px && this.y === py;
-    }
-
-    getRenderPos() {
-        if (this.moving && typeof this.renderX === 'number') return { x: this.renderX, y: this.renderY };
-        return { x: this.x * TILE_SIZE, y: this.y * TILE_SIZE };
-    }
 }
+
 
 async function loadLevels() {
     try {
@@ -941,10 +984,35 @@ function handleKeyPress(e) {
                 checkCollisions();
                 if (!gameRunning) return; // died during intermediate
 
-                // Handle ice sliding: if we're on ICE, continue the loop until we leave ice
                 const tile = currentLevel.tiles[playerPos.y][playerPos.x];
+                
                 if (tile === TILE_TYPES.ICE) {
-                    continue; // keep sliding until non-ice
+                    continue;
+                }
+
+                if (tile === TILE_TYPES.DIRECTION_UP) {
+                    playerPos.y -= 1;
+                    movePlayerToTile(playerPos.x, playerPos.y);
+                    await waitForPlayerToArrive();
+                    continue;
+                }
+                if (tile === TILE_TYPES.DIRECTION_DOWN) {
+                    playerPos.y += 1;
+                    movePlayerToTile(playerPos.x, playerPos.y);
+                    await waitForPlayerToArrive();
+                    continue;
+                }
+                if (tile === TILE_TYPES.DIRECTION_LEFT) {
+                    playerPos.x -= 1;
+                    movePlayerToTile(playerPos.x, playerPos.y);
+                    await waitForPlayerToArrive();
+                    continue;
+                }
+                if (tile === TILE_TYPES.DIRECTION_RIGHT) {
+                    playerPos.x += 1;
+                    movePlayerToTile(playerPos.x, playerPos.y);
+                    await waitForPlayerToArrive();
+                    continue;
                 }
 
                 if (tile === TILE_TYPES.WATER || tile === TILE_TYPES.LAVA || tile === TILE_TYPES.GOAL) break;
@@ -1018,8 +1086,8 @@ function canMoveTo(x, y) {
     // 4. Block (if it can be pushed)
     // We handle the "if block" logic in handleKeyPress, so here we just return true if it's a valid tile to *attempt* to move to
     
-    // Player can move to empty, goal, water (dies), or lava (dies)
-    return (tile === TILE_TYPES.EMPTY || tile === TILE_TYPES.WATER || tile === TILE_TYPES.GOAL || tile === TILE_TYPES.LAVA || tile === TILE_TYPES.ICE);
+    // Player can move to empty, goal, water, lava, ice, or direction tiles
+    return (tile === TILE_TYPES.EMPTY || tile === TILE_TYPES.WATER || tile === TILE_TYPES.GOAL || tile === TILE_TYPES.LAVA || tile === TILE_TYPES.ICE || tile === TILE_TYPES.DIRECTION_UP || tile === TILE_TYPES.DIRECTION_DOWN || tile === TILE_TYPES.DIRECTION_LEFT || tile === TILE_TYPES.DIRECTION_RIGHT);
 }
 
 function canPushBlockTo(x, y) {
@@ -1233,9 +1301,7 @@ function moveOrbs() {
 
 async function stepOrbs() {
     if (!orbs || orbs.length === 0) return;
-    // Each orb executes its next sequence command (allow them to animate/sliding internally)
-    await Promise.all(orbs.map(o => o.step(pushableBlocks, currentLevel, orbs)));
-    // After orbs moved, check collisions (orb vs player)
+    await Promise.all(orbs.map(o => o.step(pushableBlocks, currentLevel, orbs, playerPos)));
     checkCollisions();
 }
 
@@ -1421,6 +1487,26 @@ function draw() {
             } else if (tile === TILE_TYPES.ICE) {
                 ctx.fillStyle = COLORS.ICE;
                 ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+            } else if (tile === TILE_TYPES.DIRECTION_UP) {
+                ctx.fillStyle = COLORS.DIRECTION_UP;
+                ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+                ctx.fillStyle = '#fff';
+                ctx.fillText('▲', px + TILE_SIZE/2 - 4, py + TILE_SIZE/2 + 4);
+            } else if (tile === TILE_TYPES.DIRECTION_DOWN) {
+                ctx.fillStyle = COLORS.DIRECTION_DOWN;
+                ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+                ctx.fillStyle = '#fff';
+                ctx.fillText('▼', px + TILE_SIZE/2 - 4, py + TILE_SIZE/2 + 4);
+            } else if (tile === TILE_TYPES.DIRECTION_LEFT) {
+                ctx.fillStyle = COLORS.DIRECTION_LEFT;
+                ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+                ctx.fillStyle = '#fff';
+                ctx.fillText('◀', px + TILE_SIZE/2 - 4, py + TILE_SIZE/2 + 4);
+            } else if (tile === TILE_TYPES.DIRECTION_RIGHT) {
+                ctx.fillStyle = COLORS.DIRECTION_RIGHT;
+                ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+                ctx.fillStyle = '#fff';
+                ctx.fillText('▶', px + TILE_SIZE/2 - 4, py + TILE_SIZE/2 + 4);
             }
             
             ctx.strokeStyle = COLORS.GRID;
@@ -1443,7 +1529,13 @@ function draw() {
         const px = pos.x;
         const py = pos.y;
         const radius = TILE_SIZE * 0.35;
-        ctx.fillStyle = COLORS.ORB;
+        if (orb.type === 'flying') {
+            ctx.fillStyle = COLORS.ORB_FLYING;
+        } else if (orb.type === 'strong') {
+            ctx.fillStyle = COLORS.ORB_STRONG;
+        } else {
+            ctx.fillStyle = COLORS.ORB;
+        }
         ctx.beginPath();
         ctx.arc(px + TILE_SIZE / 2, py + TILE_SIZE / 2, radius, 0, Math.PI * 2);
         ctx.fill();
