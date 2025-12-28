@@ -900,7 +900,7 @@ function handleKeyPress(e) {
             // Defer orb steps until the entire move (including ice sliding) completes
             suppressOrbSteps = true;
 
-            for (let step = 0; step < maxSteps || true; step++) {
+            for (let step = 0; step < maxSteps; step++) {
                 const nx = playerPos.x + dx;
                 const ny = playerPos.y + dy;
 
