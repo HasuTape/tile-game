@@ -37,6 +37,9 @@ async function loadLevels() {
                 // Default to a single wait command to avoid empty sequences
                 orb.seq = ['wait'];
             }
+            if (!orb.type) {
+                orb.type = 'normal';
+            }
         });
     });
     if (levels.length > 0) {
@@ -121,7 +124,7 @@ function setTile(x, y) {
         const orbIndex = parseInt(currentTool.split('-')[1]);
         if (editingOrbIndex === orbIndex) {
             if (!level.orbs[orbIndex]) {
-                level.orbs[orbIndex] = { waypoints: [], speed: 1, x: x, y: y, seq: ['wait'] };
+                level.orbs[orbIndex] = { waypoints: [], speed: 1, x: x, y: y, seq: ['wait'], type: 'normal' };
             }
             // Set starting position for the orb when editing
             level.orbs[orbIndex].x = x;
@@ -129,6 +132,10 @@ function setTile(x, y) {
             // Ensure seq exists
             if (!Array.isArray(level.orbs[orbIndex].seq) || level.orbs[orbIndex].seq.length === 0) {
                 level.orbs[orbIndex].seq = ['wait'];
+            }
+            // Ensure type exists
+            if (!level.orbs[orbIndex].type) {
+                level.orbs[orbIndex].type = 'normal';
             }
             updateOrbsList();
         }
@@ -196,6 +203,14 @@ function draw() {
                 ctx.strokeStyle = '#ffffff';
                 ctx.lineWidth = 2;
                 ctx.stroke();
+            }
+            
+            // Show red dot for attacking strong orbs
+            if (orb.type === 'strong' && orb.canAttack) {
+                ctx.fillStyle = '#FF0000';
+                ctx.beginPath();
+                ctx.arc(opx + radius * 0.6, opy - radius * 0.6, 3, 0, Math.PI * 2);
+                ctx.fill();
             }
         }
 
@@ -339,9 +354,14 @@ function updateOrbsList() {
 
         const wpCount = orb && orb.waypoints ? orb.waypoints.length : 0;
         const seqPreview = orb && orb.seq ? orb.seq.join(', ') : '';
+        const orbType = orb && orb.type ? orb.type : 'normal';
+        const typeColor = ORB_COLORS[orbType] || ORB_COLORS.normal;
         div.innerHTML = `
             <div style="display:flex; justify-content:space-between; align-items:center;">
-                <div>Orb ${idx + 1}</div>
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <div style="width:12px; height:12px; border-radius:50%; background:${typeColor};"></div>
+                    <span>Orb ${idx + 1} (${orbType})</span>
+                </div>
                 <div style="font-size:11px; color:#999;">Seq: ${seqPreview}</div>
             </div>
             <div style="font-size: 11px; color: #999; margin-top:6px;">
@@ -375,6 +395,21 @@ function updateOrbsList() {
                 <input type="number" id="orbStartY" style="width:60px;" value="${orb.y || 0}">
                 <button onclick="applyOrbStart()" style="flex:1;">Apply start</button>
             </div>
+
+            <div style="margin-bottom:8px;">
+                <div style="font-size:12px; margin-bottom:6px;">Orb Type:</div>
+                <select id="orbType" onchange="updateOrbType(${editingOrbIndex})" style="width:100%; padding:4px;">
+                    <option value="normal" ${(orb.type || 'normal') === 'normal' ? 'selected' : ''}>Normal (Red)</option>
+                    <option value="flying" ${orb.type === 'flying' ? 'selected' : ''}>Flying (Purple)</option>
+                    <option value="strong" ${orb.type === 'strong' ? 'selected' : ''}>Strong (Brown)</option>
+                </select>
+            </div>
+            
+            ${orb.type === 'strong' ? `
+            <div style="margin-bottom:8px;">
+                <label><input type="checkbox" id="orbCanAttack" ${orb.canAttack ? 'checked' : ''} onchange="updateOrbAttack(${editingOrbIndex})"> Can Attack (shows red dot)</label>
+            </div>
+            ` : ''}
 
             <div style="margin-bottom:8px;">
                 <div style="font-size:12px; margin-bottom:6px;">Sequence (commands):</div>
@@ -412,8 +447,8 @@ function startEditOrb(idx) {
 
 function addOrb() {
     const level = levels[currentLevelIndex];
-    // Default orb: start at 0,0 with a single WAIT command
-    level.orbs.push({ waypoints: [], speed: 1, x: 0, y: 0, seq: ['wait'] });
+    // Default orb: start at 0,0 with a single WAIT command and normal type
+    level.orbs.push({ waypoints: [], speed: 1, x: 0, y: 0, seq: ['wait'], type: 'normal' });
     updateOrbsList();
 }
 
@@ -514,6 +549,28 @@ function moveOrbCommand(orbIdx, cmdIdx, dir) {
     renderOrbSeq(orb, orbIdx);
 }
 
+function updateOrbAttack(orbIdx) {
+    const level = levels[currentLevelIndex];
+    const orb = level.orbs[orbIdx];
+    if (!orb) return;
+    const canAttack = document.getElementById('orbCanAttack').checked;
+    saveToHistory();
+    orb.canAttack = canAttack;
+    updateOrbsList();
+    draw();
+}
+
+function updateOrbType(orbIdx) {
+    const level = levels[currentLevelIndex];
+    const orb = level.orbs[orbIdx];
+    if (!orb) return;
+    const newType = document.getElementById('orbType').value;
+    saveToHistory();
+    orb.type = newType;
+    updateOrbsList();
+    draw();
+}
+
 function applyOrbStart() {
     const level = levels[currentLevelIndex];
     const orb = level.orbs[editingOrbIndex];
@@ -589,6 +646,7 @@ document.getElementById('fileInput').addEventListener('change', (e) => {
                         orb.y = orb.waypoints[0][1];
                     }
                     if (!Array.isArray(orb.seq) || orb.seq.length === 0) orb.seq = ['wait'];
+                    if (!orb.type) orb.type = 'normal';
                 });
             });
             
@@ -627,6 +685,7 @@ function playCurrentLevel() {
             orb.y = orb.waypoints[0][1];
         }
         if (!Array.isArray(orb.seq) || orb.seq.length === 0) orb.seq = ['wait'];
+        if (!orb.type) orb.type = 'normal';
         return orb;
     });
 

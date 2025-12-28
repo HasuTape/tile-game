@@ -185,6 +185,7 @@ class Orb {
         // type
         this.type = data.type || "normal";
         this.flying = this.type === "flying";
+        this.canAttack = data.canAttack || false; // Optional attack for strong orbs
 
         // animation
         this.startX = this.x * TILE_SIZE;
@@ -284,15 +285,34 @@ class Orb {
                                 blocksToPush[i].stepOnce(dx, dy);
                             }
                         }
-                        // Orb moves after pushing
+                        
+                        // Continue sliding blocks on ice like player does
+                        for (const block of blocksToPush) {
+                            let bx = block.destX / TILE_SIZE;
+                            let by = block.destY / TILE_SIZE;
+                            while (true) {
+                                const blockTile = currentLevelRef.tiles[by] && currentLevelRef.tiles[by][bx];
+                                if (blockTile !== TILE_TYPES.ICE) break;
+                                const nextBx = bx + dx;
+                                const nextBy = by + dy;
+                                if (nextBx < 0 || nextBx >= currentLevelRef.width || nextBy < 0 || nextBy >= currentLevelRef.height) break;
+                                const nextTile = currentLevelRef.tiles[nextBy][nextBx];
+                                if (nextTile === TILE_TYPES.WALL) break;
+                                const hasBlockAhead = pushableBlocksRef.find(b => b.x === nextBx && b.y === nextBy);
+                                if (hasBlockAhead) break;
+                                if (nextTile !== TILE_TYPES.EMPTY && nextTile !== TILE_TYPES.WATER && nextTile !== TILE_TYPES.GOAL && nextTile !== TILE_TYPES.LAVA && nextTile !== TILE_TYPES.ICE) break;
+                                block.stepOnce(dx, dy);
+                                bx = nextBx;
+                                by = nextBy;
+                            }
+                        }
                     } else {
                         return;
                     }
                 }
             }
 
-            const collisionOrb = otherOrbs.find(o => o !== this && o.x === nx && o.y === ny);
-            if (collisionOrb) return;
+            // Remove orb-to-orb collision check - orbs can pass through each other
 
             this.prevX = this.x;
             this.prevY = this.y;
@@ -315,6 +335,30 @@ class Orb {
 
             break;
         }
+    }
+
+    update(dt) {
+        if (!this.moving) return;
+        this.animProgress += dt;
+        const t = Math.min(this.animProgress / this.animDuration, 1);
+        if (t >= 1) {
+            this.moving = false;
+        }
+    }
+
+    getRenderPos() {
+        if (this.moving) {
+            const t = Math.min(this.animProgress / this.animDuration, 1);
+            const dx = this.destX - this.startX;
+            const dy = this.destY - this.startY;
+            return { x: this.startX + dx * t, y: this.startY + dy * t };
+        }
+        return { x: this.x * TILE_SIZE, y: this.y * TILE_SIZE };
+    }
+
+    checkCollision(px, py) {
+        if (this.type === 'strong' && !this.canAttack) return false; // Strong orbs only attack if canAttack is true
+        return this.x === px && this.y === py;
     }
 }
 
@@ -410,12 +454,10 @@ function startLevel(levelId) {
     playerPos = { x: startX, y: startY };
     
     moveHistory = []; // Reset history
-    sliding = false; // reset sliding state on level start
-    slideDir = { dx: 0, dy: 0 };
     playerRender.xPos = playerPos.x * TILE_SIZE;
     playerRender.yPos = playerPos.y * TILE_SIZE;
-    playerRender.destX = playerPos.x;
-    playerRender.destY = playerPos.y;
+    playerRender.destX = playerPos.x * TILE_SIZE;
+    playerRender.destY = playerPos.y * TILE_SIZE;
     playerRender.moving = false;
     
     // Validate player position
@@ -809,6 +851,12 @@ function handleKeyPress(e) {
             if (lastState.orbs) {
                 orbs = lastState.orbs.map(o => new Orb(o));
             }
+            // Update player render position
+            playerRender.xPos = playerPos.x * TILE_SIZE;
+            playerRender.yPos = playerPos.y * TILE_SIZE;
+            playerRender.destX = playerPos.x * TILE_SIZE;
+            playerRender.destY = playerPos.y * TILE_SIZE;
+            playerRender.moving = false;
         }
         return;
     }
@@ -835,7 +883,8 @@ function handleKeyPress(e) {
     const currentState = {
         playerPos: { ...playerPos },
         pushableBlocks: pushableBlocks.map(b => ({ ...b })),
-        tiles: JSON.parse(JSON.stringify(currentLevel.tiles))
+        tiles: JSON.parse(JSON.stringify(currentLevel.tiles)),
+        orbs: orbs.map(o => ({ x: o.x, y: o.y, idx: o.idx, type: o.type, seq: o.seq.slice() }))
     };
 
     if (canMoveTo(newX, newY) || pushableBlocks.some(b => b.x === newX && b.y === newY)) {
@@ -1113,61 +1162,8 @@ function canPushBlockTo(x, y) {
 
 // Attempt a single slide step (player): decide whether to move, push blocks, or stop.
 function attemptSlideStep() {
-    if (!sliding || !currentLevel) return;
-
-    const dx = slideDir.dx;
-    const dy = slideDir.dy;
-    const nextX = playerPos.x + dx;
-    const nextY = playerPos.y + dy;
-
-    // Out of bounds or wall -> stop sliding
-    if (nextX < 0 || nextX >= currentLevel.width || nextY < 0 || nextY >= currentLevel.height) {
-        sliding = false;
-        return;
-    }
-
-    const nextTile = currentLevel.tiles[nextY][nextX];
-
-    // If there's a block in the way, try to push chain
-    const block = pushableBlocks.find(b => b.x === nextX && b.y === nextY);
-    if (block) {
-        // Collect blocks in line
-        const blocksToPush = [];
-        let cx = nextX, cy = nextY;
-        while (true) {
-            const bb = pushableBlocks.find(b => b.x === cx && b.y === cy);
-            if (!bb) break;
-            blocksToPush.push(bb);
-            cx += dx; cy += dy;
-        }
-
-        const lastBlock = blocksToPush[blocksToPush.length - 1];
-        const targetX = lastBlock.x + dx;
-        const targetY = lastBlock.y + dy;
-
-        if (!canPushBlockTo(targetX, targetY)) {
-            sliding = false; // blocked
-            return;
-        }
-
-        // Push chain synchronously then move player into the freed space (discrete steps)
-        blocksSliding = true;
-        slideBlocksChainDiscrete(blocksToPush, dx, dy);
-        blocksSliding = false;
-        // Now move player into that tile (immediate, no animation)
-        movePlayerToTile(nextX, nextY);
-        // Defensive: ensure any selection locks are cleared (in case this was triggered while selectionLocked)
-        clearPlayerSelection();
-        return;
-    }
-
-    // No block in way: move player into next tile (animated)
-    if (nextTile === TILE_TYPES.WALL) {
-        sliding = false;
-        return;
-    }
-
-    movePlayerToTile(nextX, nextY);
+    // This function is no longer used but kept for compatibility
+    return;
 }
 
 function slideBlocksChainDiscrete(chain, dx, dy) {
@@ -1272,8 +1268,7 @@ function updateEntities(dt) {
         }
     }
     pushableBlocks.forEach(b => b.update(dt));
-
-    // Orbs are stepped only when the player moves; do not move them every frame.
+    orbs.forEach(o => o.update(dt));
 
     // Defensive cleanup: if nothing is moving, ensure locks/flags are cleared
     const anyBlockMoving = pushableBlocks.some(b => b.moving);
@@ -1326,14 +1321,12 @@ function onPlayerArrive() {
 
     // Death conditions
     if (tile === TILE_TYPES.WATER || tile === TILE_TYPES.LAVA) {
-        sliding = false;
         dieLevel();
         return;
     }
 
     // Win
     if (tile === TILE_TYPES.GOAL) {
-        sliding = false;
         checkWin();
         return;
     }
@@ -1382,20 +1375,18 @@ function dieLevel() {
     gameRunning = false;
     
     const message = document.getElementById('winMessage');
-    message.innerHTML = '<div>You died!<br><br>Click to restart</div>';
+    message.innerHTML = `
+        <div>You died!<br><br>
+            <button onclick="backToMenu()">Back to Menu</button>
+            <button onclick="startLevel(currentLevelId)">Reset Level</button>
+        </div>
+    `;
     message.classList.add('show');
     
     if (keyHandlerAttached) {
         document.removeEventListener('keydown', handleKeyPress);
         keyHandlerAttached = false;
     }
-
-    // Clicking the message hides it and restarts the level
-    message.onclick = () => {
-        message.classList.remove('show');
-        message.onclick = null;
-        startLevel(currentLevelId);
-    };
 }
 
 function winLevel() {
@@ -1407,9 +1398,16 @@ function winLevel() {
     }
     
     const nextLevel = currentLevelId + 1;
+    const hasNextLevel = nextLevel < levels.length;
     
     const message = document.getElementById('winMessage');
-    message.innerHTML = `<div>You win!<br>${currentLevel.name}<br><br>Click to restart</div>`;
+    message.innerHTML = `
+        <div>You win!<br>${currentLevel.name}<br><br>
+            <button onclick="backToMenu()">Back to Menu</button>
+            <button onclick="startLevel(currentLevelId)">Reset Level</button>
+            ${hasNextLevel ? `<button onclick="startLevel(${nextLevel})">Next Level</button>` : ''}
+        </div>
+    `;
     
     message.classList.add('show');
     
@@ -1417,13 +1415,6 @@ function winLevel() {
         document.removeEventListener('keydown', handleKeyPress);
         keyHandlerAttached = false;
     }
-
-    // Clicking restarts the level (as requested "instead of exit -> restart")
-    message.onclick = () => {
-        message.classList.remove('show');
-        message.onclick = null;
-        startLevel(currentLevelId);
-    };
 }
 
 function backToMenu() {
@@ -1436,7 +1427,7 @@ function backToMenu() {
     document.getElementById('levelSelectWrapper').style.display = 'block';
     const msg = document.getElementById('winMessage');
     msg.classList.remove('show');
-    msg.onclick = null;
+    msg.innerHTML = '';
     
     setupLevelSelect();
 }
@@ -1539,6 +1530,14 @@ function draw() {
         ctx.beginPath();
         ctx.arc(px + TILE_SIZE / 2, py + TILE_SIZE / 2, radius, 0, Math.PI * 2);
         ctx.fill();
+        
+        // Show red dot for attacking strong orbs
+        if (orb.type === 'strong' && orb.canAttack) {
+            ctx.fillStyle = '#FF0000';
+            ctx.beginPath();
+            ctx.arc(px + TILE_SIZE / 2 + radius * 0.6, py + TILE_SIZE / 2 - radius * 0.6, 4, 0, Math.PI * 2);
+            ctx.fill();
+        }
     });
     
     // Draw move highlights if player is selected (mobile tap mode)

@@ -154,6 +154,21 @@
             display: none;
         }
 
+        .win-message button {
+            margin: 5px;
+            padding: 10px 20px;
+            background: #fff;
+            color: #000;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+
+        .win-message button:hover {
+            background: #ddd;
+        }
+
         .win-message.show {
             display: block;
             animation: popIn 0.5s ease;
@@ -296,11 +311,14 @@
         </div>
 
         <div id="gameView">
-            <div id="levelInfo"></div>
+            <div style="display: flex; justify-content: space-between; align-items: center; width: 100%; max-width: 600px;">
+                <div id="levelInfo"></div>
+                <button id="backButton" style="background: #666; padding: 8px 16px;">Menu</button>
+            </div>
             <div id="levelInstructions" style="white-space: pre-wrap; color: #ddd; margin-bottom: 8px;"></div>
             <canvas id="canvas"></canvas>
             <div class="controls">
-                <p style="margin-bottom:10px;">W/A/S/D — move. <button id="backButton">Back</button></p>
+                <p style="margin-bottom:10px;">W/A/S/D — move, R — reset, Z — undo</p>
 
                 <!-- Mobile arrow controls (visible on narrow screens) -->
                 <div id="mobileArrows" class="mobile-arrows" aria-hidden="false">
